@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: datn_postgres
+    restart: always
+    env_file: .env
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    ports:
+      - "5555:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - datn_net
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: datn_pgadmin
+    restart: always
+    env_file: .env
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - datn_net
+
+volumes:
+  pg_data:
+
+networks:
+  datn_net:
