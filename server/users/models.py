@@ -2,12 +2,18 @@ from django.db import models
 
 from django.contrib.auth.models import AbstractUser
 from django.utils import timezone
+from utils.gencode import generate_verify_code
 
 
 class User(AbstractUser):
     avatar = models.URLField(blank=True, null=True)
     bio = models.TextField(blank=True)
-    # last_active used for presence / leaderboard recency
+    verify_code = models.CharField(
+        max_length=6, 
+        default=generate_verify_code, 
+        blank=True, 
+        null=True
+    )
     last_active = models.DateTimeField(default=timezone.now)
 
 

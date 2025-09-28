@@ -12,11 +12,11 @@ class FriendViewSet(viewsets.ModelViewSet):
     serializer_class = FriendSerializer
 
 
-class CalendarEventSerializer(viewsets.ModelViewSet):
+class CalendarEventViewSet(viewsets.ModelViewSet):
     queryset = CalendarEvent.objects.all()
     serializer_class = CalendarEventSerializer
 
 
-class LeaderboardEntrySerialzer(viewsets.ModelViewSet):
+class LeaderboardEntryViewSet(viewsets.ModelViewSet):
     queryset = LeaderboardEntry.objects.all()
     serializer_class = LeaderboardEntrySerializer
