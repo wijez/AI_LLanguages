@@ -2,7 +2,8 @@ from dataclasses import field
 from rest_framework import serializers 
 
 from languages.models import (
-    Language, LanguageEnrollment, Lesson, Topic, TopicProgress, Skill
+    Language, LanguageEnrollment, Lesson, Topic, TopicProgress, Skill,
+    SuggestedLesson, UserSkillStats
 )
 
 
@@ -39,4 +40,16 @@ class TopicProgressSerializer(serializers.ModelSerializer):
 class SkillSerializer(serializers.ModelSerializer):
     class Meta:
         model = Skill
+        fields = '__all__'
+
+
+class SuggestedLessonSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SuggestedLesson
+        fields = '__all__'
+
+
+class UserSkillStatsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserSkillStats
         fields = '__all__'

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = ""
 authors = ["wijez <viet.info.43@gmail.com>"]
 readme = "README.md"
+package-mode = false
 
 [tool.poetry.dependencies]
 django-restframework = "^0.0.1"

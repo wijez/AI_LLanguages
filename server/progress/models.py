@@ -2,8 +2,6 @@ from django.db import models
 from users.models  import User
 
 
-
-
 class DailyXP(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='daily_xp')
     date = models.DateField()

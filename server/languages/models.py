@@ -67,3 +67,24 @@ class Lesson(models.Model):
     content = models.JSONField(null=True, blank=True)
     xp_reward = models.IntegerField(default=10)
     duration_seconds = models.IntegerField(default=120)
+
+
+class UserSkillStats(models.Model):
+    enrollment = models.ForeignKey(LanguageEnrollment, on_delete=models.CASCADE,  related_name='skill_stats')
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE)
+    xp = models.IntegerField(default=0)
+    last_practiced = models.DateTimeField(null=True, blank=True)
+    proficiency_score = models.FloatField(default=0.0) 
+
+    class Meta: 
+        unique_together = ('enrollment', 'skill')
+
+
+class SuggestedLesson(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='suggested_lessons')
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE)
+    priority_score = models.FloatField(default=0.0)
+    recommended_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'lesson')

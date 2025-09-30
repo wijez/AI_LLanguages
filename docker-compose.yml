@@ -1,37 +1,57 @@
+
 services:
-  postgres:
+  # BE Database
+  postgres_be:
     image: postgres:16
-    container_name: datn_postgres
+    container_name: postgres_be
     restart: always
-    env_file: .env
     environment:
-      - POSTGRES_DB=${DB_NAME}
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      POSTGRES_DB: be_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: portgasDace
     ports:
-      - "5555:5432"
+      - "5433:5432"   # BE Postgres exposed on 5433
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - be_data:/var/lib/postgresql/data
     networks:
       - datn_net
 
+  # AI Database
+  postgres_ai:
+    image: postgres:16
+    container_name: postgres_ai
+    restart: always
+    environment:
+      POSTGRES_DB: ai_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: portgasDace
+    ports:
+      - "5434:5432"   # AI Postgres exposed on 5434
+    volumes:
+      - ai_data:/var/lib/postgresql/data
+    networks:
+      - datn_net
+
+  # PGAdmin (optional)
   pgadmin:
     image: dpage/pgadmin4:8
-    container_name: datn_pgadmin
+    container_name: pgadmin
     restart: always
-    env_file: .env
     environment:
-      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL}
-      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
     ports:
       - "5050:80"
-    depends_on:
-      - postgres
     networks:
       - datn_net
+    depends_on:
+      - postgres_be
+      - postgres_ai
 
 volumes:
-  pg_data:
+  be_data:
+  ai_data:
 
 networks:
   datn_net:
+

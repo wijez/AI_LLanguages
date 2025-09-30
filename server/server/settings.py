@@ -98,17 +98,29 @@ WSGI_APPLICATION = 'server.wsgi.application'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
 
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.postgresql",
+#         "NAME": os.getenv("DB_NAME", "learning_language"),
+#         "USER": os.getenv("DB_USER", "postgres"),
+#         "PASSWORD": os.getenv("DB_PASSWORD", "portgasDace"),
+#         "HOST": "localhost",
+#         "PORT": "5555",
+#         "CONN_MAX_AGE": 60,
+#     }
+# }
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME", "learning_language"),
-        "USER": os.getenv("DB_USER", "postgres"),
-        "PASSWORD": os.getenv("DB_PASSWORD", "portgasDace"),
-        "HOST": os.getenv("DB_HOST", "127.0.0.1"),
-        "PORT": os.getenv("DB_PORT", "5433"),
-        "CONN_MAX_AGE": 60,
+     'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'be_db',
+        'USER': 'postgres',
+        'PASSWORD': 'portgasDace',
+        'HOST': 'localhost',   # kết nối ra container
+        'PORT': '5433',        # cổng map từ docker-compose
     }
 }
+
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
@@ -176,6 +188,7 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True, 
+
 }
 
 

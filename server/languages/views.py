@@ -1,11 +1,13 @@
 from django.shortcuts import render
 from rest_framework import viewsets
 from languages.models import ( 
-    Language, Lesson, LanguageEnrollment, Topic, TopicProgress, Skill
+    Language, Lesson, LanguageEnrollment, Topic, 
+    TopicProgress, Skill,
+    SuggestedLesson, UserSkillStats
 )
 from languages.serializers import (
     LanguageSerializer, LanguageEnrollmentSerializer, TopicProgressSerializer, TopicSerializer,
-    SkillSerializer, LessonSerializer
+    SkillSerializer, LessonSerializer, SuggestedLessonSerializer, UserSkillStatsSerializer
 )
 
 class LanguageViewSet(viewsets.ModelViewSet):
@@ -36,3 +38,13 @@ class TopicProgressViewSet(viewsets.ModelViewSet):
 class SkillViewSet(viewsets.ModelViewSet):
     queryset = Skill.objects.all()
     serializer_class = SkillSerializer
+
+
+class SuggestedLessonViewSet(viewsets.ModelViewSet):
+    queryset = SuggestedLesson.objects.all()
+    serializer_class = SuggestedLessonSerializer
+
+
+class UserSkillStatsViewSet(viewsets.ModelViewSet):
+    queryset = UserSkillStats.objects.all()
+    serializer_class = UserSkillStatsSerializer
