@@ -126,3 +126,30 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_RENDERER_CLASSES': [
+        "rest_framework.renderers.JSONOpenAPIRenderer", 
+        # Nếu cần thêm hỗ trợ khác (ví dụ UI), thêm vào đây
+        # "rest_framework.renderers.BrowsableAPIRenderer",
+        # "rest_framework.renderers.CoreJSONRenderer",
+    ],
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'DATN API',
+    'DESCRIPTION': 'API documentation for DATN project',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True, 
+
+}

@@ -6,6 +6,7 @@ from languages.views import *
 from progress.views import * 
 from vocabulary.views import * 
 
+
 router = DefaultRouter()
 
 # User
@@ -37,4 +38,6 @@ router.register(r'calendar-events', CalendarEventViewSet, basename='calendareven
 router.register(r'leaderboard-entries', LeaderboardEntryViewSet, basename='leaderboardentry')
 
 
-urlpatterns = router.urls 
+urlpatterns = router.urls + [
+    path(r'export/learning-data', export_learning_data, name='export-learning-data')
+]

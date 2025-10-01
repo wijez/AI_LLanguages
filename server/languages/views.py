@@ -1,5 +1,8 @@
 from django.shortcuts import render
 from rest_framework import viewsets
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from vocabulary.models import KnownWord
 from languages.models import ( 
     Language, Lesson, LanguageEnrollment, Topic, 
     TopicProgress, Skill,
@@ -7,7 +10,7 @@ from languages.models import (
 )
 from languages.serializers import (
     LanguageSerializer, LanguageEnrollmentSerializer, TopicProgressSerializer, TopicSerializer,
-    SkillSerializer, LessonSerializer, SuggestedLessonSerializer, UserSkillStatsSerializer
+    SkillSerializer, LessonSerializer, SuggestedLessonSerializer, UserSkillStatsSerializer, LanguageEnrollmentExportSerializer
 )
 
 class LanguageViewSet(viewsets.ModelViewSet):
@@ -48,3 +51,15 @@ class SuggestedLessonViewSet(viewsets.ModelViewSet):
 class UserSkillStatsViewSet(viewsets.ModelViewSet):
     queryset = UserSkillStats.objects.all()
     serializer_class = UserSkillStatsSerializer
+
+
+@api_view(['GET'])
+def export_learning_data(request):
+    enrollments = LanguageEnrollment.objects.all().prefetch_related(
+        "skill_stats__skill",
+        "known_words__word",
+        "topic_progress__topic",
+        "language"
+    )
+    serializer = LanguageEnrollmentExportSerializer(enrollments, many=True)
+    return Response({"enrollments": serializer.data})

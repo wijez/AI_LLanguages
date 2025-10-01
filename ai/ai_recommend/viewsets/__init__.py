@@ -3,3 +3,4 @@ from .feedback_loop_viewset import *
 from .learning_interaction_viewset import *
 from .mistake_viewset import *
 from .recommendation_viewset import *
+from .sync_data import *

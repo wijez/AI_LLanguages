@@ -16,8 +16,10 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from ai_recommend.viewsets import sync_learning_data
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/ai/', include('ai_recommend.urls')),
+    path('api/sync-learning-data/', sync_learning_data, name='sync-learning-data'),
 ]

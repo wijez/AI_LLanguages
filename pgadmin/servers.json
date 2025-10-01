@@ -1,0 +1,24 @@
+{
+    "Servers": {
+        "1": {
+            "Name": "BE Database",
+            "Group": "PostgreSQL",
+            "Host": "localhost",
+            "Port": 5432,
+            "MaintenanceDB": "be_db",
+            "Username": "be_user",
+            "SSLMode": "prefer",
+            "PassFile": null
+        },
+        "2": {
+            "Name": "AI Database",
+            "Group": "PostgreSQL",
+            "Host": "localhost",
+            "Port": 5432,
+            "MaintenanceDB": "ai_db",
+            "Username": "ai_user",
+            "SSLMode": "prefer",
+            "PassFile": null
+        }
+    }
+}
