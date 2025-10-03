@@ -1,3 +1,3 @@
-from .ai_model_version_serializer import AIModelVersionSerializer
+from .ai_model_version_serializer import AIModelVersionSerializer, FeatureSnapshotSerializer, TrainingRunSerializer
 from .feedback_loop_serializer import FeedbackLoopSerializer
 from .recommendation_serializer import RecommendationSerializer

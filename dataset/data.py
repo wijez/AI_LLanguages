@@ -2,8 +2,8 @@ import json
 import zipfile
 import os
 
-# 200 phổ biến động từ tiếng Anh (A1–C1 mix)
-verbs = [
+# danh sách động từ (đã loại trùng)
+verbs = list(dict.fromkeys([
     "accept", "add", "allow", "ask", "be", "become", "begin", "believe", "bring", "build",
     "buy", "call", "can", "choose", "come", "consider", "continue", "create", "cut", "decide",
     "develop", "do", "draw", "drive", "eat", "enable", "expect", "explain", "fall", "feel",
@@ -19,17 +19,16 @@ verbs = [
     "adapt", "affect", "analyze", "argue", "arrive", "assume", "attend", "avoid", "belong", "break",
     "compare", "complain", "contribute", "convince", "cope", "deliver", "deny", "discover", "encourage", "establish",
     "examine", "exist", "explore", "express", "face", "fail", "handle", "identify", "imply", "influence",
-    "inform", "insist", "invest", "involve", "judge", "maintain", "measure", "mention", "notice", "obtain",
+    "insist", "invest", "involve", "judge", "maintain", "measure", "mention", "notice", "obtain",
     "occur", "perform", "prefer", "prevent", "protect", "prove", "realize", "recognize", "recommend", "reduce",
-    "reflect", "refuse", "relate", "replace", "require", "respond", "result", "reveal", "separate", "share",
-    "solve", "suffer", "support", "survive", "test", "train", "transform", "value", "warn", "wonder",
-    "agree", "disagree", "argue", "compete", "debate", "criticize", "defend", "oppose", "persuade", "negotiate",
+    "reflect", "refuse", "relate", "replace", "respond", "result", "reveal", "separate", "share",
+    "solve", "suffer", "survive", "test", "train", "transform", "value", "warn", "wonder",
+    "agree", "disagree", "compete", "debate", "criticize", "defend", "oppose", "persuade", "negotiate",
     "clarify", "summarize", "interpret", "translate", "predict", "anticipate", "conclude", "demonstrate", "illustrate", "emphasize",
-    "highlight", "underline", "stress", "overcome", "dominate", "emerge", "adapt", "adopt", "assess", "calculate",
+    "highlight", "underline", "stress", "overcome", "dominate", "emerge", "adopt", "assess", "calculate",
     "classify", "categorize", "confirm", "determine", "distinguish", "evaluate", "exceed", "fulfill", "justify", "validate"
-]
+]))
 
-# function generate verb forms
 def generate_forms(verb):
     forms = {
         "base": verb,
@@ -38,8 +37,6 @@ def generate_forms(verb):
         "past_participle": verb + "ed",
         "third_person": verb + "s"
     }
-
-    # irregular overrides (simplified subset)
     irregular = {
         "be": {"past_simple": "was", "past_participle": "been", "present_participle": "being", "third_person": "is"},
         "begin": {"past_simple": "began", "past_participle": "begun"},
@@ -63,68 +60,54 @@ def generate_forms(verb):
         "take": {"past_simple": "took", "past_participle": "taken"},
         "write": {"past_simple": "wrote", "past_participle": "written"}
     }
-
     if verb in irregular:
         forms.update(irregular[verb])
-
     return forms
 
 words = []
 relations = []
-word_index = {}
+seen = set()
 
-current_id = 1
-
-# build words list and relations
 for v in verbs:
     forms = generate_forms(v)
-    base_id = current_id
+    base = forms["base"]
 
-    # add base word
-    words.append({
-        "language": "en",
-        "text": forms["base"],
-        "normalized": forms["base"].lower(),
-        "part_of_speech": "verb"
-    })
-    word_index[forms["base"]] = base_id
-    current_id += 1
+    if ("en", base.lower()) not in seen:
+        words.append({
+            "language": "en",
+            "text": base,
+            "normalized": base.lower(),
+            "part_of_speech": "verb"
+        })
+        seen.add(("en", base.lower()))
 
-    # add derived forms and relations
     for rel_type, form in forms.items():
         if rel_type == "base":
             continue
 
-        form_id = current_id
-        words.append({
-            "language": "en",
-            "text": form,
-            "normalized": form.lower(),
-            "part_of_speech": "verb"
-        })
-        word_index[form] = form_id
-        current_id += 1
+        if ("en", form.lower()) not in seen:
+            words.append({
+                "language": "en",
+                "text": form,
+                "normalized": form.lower(),
+                "part_of_speech": "verb"
+            })
+            seen.add(("en", form.lower()))
 
-        # add relation
         relations.append({
             "relation_type": rel_type,
-            "word": base_id,
-            "related": form_id
+            "language": "en",
+            "word_text": base,
+            "related_text": form
         })
 
-# save files
+# save
 os.makedirs("D:/AI_LL/dataset/verbs_dataset", exist_ok=True)
 
 with open("D:/AI_LL/dataset/verbs_dataset/words.json", "w", encoding="utf-8") as f:
     json.dump(words, f, indent=2, ensure_ascii=False)
 
-with open("D:/AI_LL/dataset/words_relations.json", "w", encoding="utf-8") as f:
+with open("D:/AI_LL/dataset/verbs_dataset/words_relations.json", "w", encoding="utf-8") as f:
     json.dump(relations, f, indent=2, ensure_ascii=False)
 
-# zip them
-zip_path = "D:/AI_LL/dataset/verbs_dataset.zip"
-with zipfile.ZipFile(zip_path, "w") as zipf:
-    zipf.write("D:/AI_LL/dataset/words.json", "words.json")
-    zipf.write("D:/AI_LL/dataset/words_relations.json", "words_relations.json")
-
-zip_path
+print("✅ Exported words.json & words_relations.json")

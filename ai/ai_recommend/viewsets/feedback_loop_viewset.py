@@ -6,5 +6,5 @@ from ..serializers import (
 
 
 class FeedbackLoopViewSet(viewsets.ModelViewSet):
-    queryset = FeedbackLoop.objects.all().order_by('-created_at')
+    queryset = FeedbackLoop.objects.all()
     serializer_class = FeedbackLoopSerializer

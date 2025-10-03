@@ -155,3 +155,16 @@ SPECTACULAR_SETTINGS = {
     'COMPONENT_SPLIT_REQUEST': True, 
 
 }
+
+CELERY_BROKER_URL = "redis://localhost:6379/0"
+CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
+CELERY_BEAT_SCHEDULE = {
+    "train-ai-model-every-2h": {
+        "task": "ai.tasks.train_ai_model_task",
+        "schedule": 60 * 1,  # mỗi 2h
+    }
+}
+
+
+
+

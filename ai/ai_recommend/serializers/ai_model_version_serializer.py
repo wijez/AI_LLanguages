@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from ..models import AIModelVersion
+from ..models import AIModelVersion, TrainingRun, FeatureSnapshot
 
 
 class AIModelVersionSerializer(serializers.ModelSerializer):
@@ -7,4 +7,14 @@ class AIModelVersionSerializer(serializers.ModelSerializer):
         model = AIModelVersion
         fields = '__all__'
 
+
+class TrainingRunSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TrainingRun
+        fields = '__all__'
+
+class FeatureSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FeatureSnapshot
+        fields = '__all__'
 

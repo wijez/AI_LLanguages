@@ -28,6 +28,8 @@ router.register(r'known-words', KnownWordViewSet, basename='knownword')
 router.register(r'translations', TranslationViewSet, basename='translation')
 router.register(r'words', WordViewSet, basename='word')
 router.register(r'word-relations', WordRelationViewSet, basename='wordrelation')
+router.register(r'mistake', MistakeViewSet, basename='mistake' )
+router.register('learning-interaction', LearningInteractionViewSet, basename='learninginteraction')
 
 #Progress 
 router.register(r'daily-xp', DailyXPViewSet)
@@ -39,5 +41,5 @@ router.register(r'leaderboard-entries', LeaderboardEntryViewSet, basename='leade
 
 
 urlpatterns = router.urls + [
-    path(r'export/learning-data', export_learning_data, name='export-learning-data')
+    path(r'export/mistakes', export_mistakes, name='export-mistakes')
 ]
