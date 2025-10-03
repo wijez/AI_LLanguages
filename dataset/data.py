@@ -113,18 +113,18 @@ for v in verbs:
         })
 
 # save files
-os.makedirs("/mnt/data/verbs_dataset", exist_ok=True)
+os.makedirs("D:/AI_LL/dataset/verbs_dataset", exist_ok=True)
 
-with open("/mnt/data/verbs_dataset/words.json", "w", encoding="utf-8") as f:
+with open("D:/AI_LL/dataset/verbs_dataset/words.json", "w", encoding="utf-8") as f:
     json.dump(words, f, indent=2, ensure_ascii=False)
 
-with open("/mnt/data/verbs_dataset/words_relations.json", "w", encoding="utf-8") as f:
+with open("D:/AI_LL/dataset/words_relations.json", "w", encoding="utf-8") as f:
     json.dump(relations, f, indent=2, ensure_ascii=False)
 
 # zip them
-zip_path = "/mnt/data/verbs_dataset.zip"
+zip_path = "D:/AI_LL/dataset/verbs_dataset.zip"
 with zipfile.ZipFile(zip_path, "w") as zipf:
-    zipf.write("/mnt/data/verbs_dataset/words.json", "words.json")
-    zipf.write("/mnt/data/verbs_dataset/words_relations.json", "words_relations.json")
+    zipf.write("D:/AI_LL/dataset/words.json", "words.json")
+    zipf.write("D:/AI_LL/dataset/words_relations.json", "words_relations.json")
 
 zip_path

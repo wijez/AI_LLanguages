@@ -12,11 +12,10 @@ class Friend(models.Model):
     updated_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         constraints = [
-            models.UniqueConstraint(
-                fields=['from_user', 'to_user'],
-                name='unique_friendship'
-            )
+            models.UniqueConstraint(fields=['from_user', 'to_user'], name='uq_friend_from_to')
         ]
+        indexes = [models.Index(fields=['from_user', 'to_user', 'accepted'])]
+
 
     def save(self, *args, **kwargs):
         # tự động cập nhật updated_at

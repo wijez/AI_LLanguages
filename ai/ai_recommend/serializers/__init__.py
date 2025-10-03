@@ -1,5 +1,3 @@
 from .ai_model_version_serializer import AIModelVersionSerializer
 from .feedback_loop_serializer import FeedbackLoopSerializer
-from .learning_interaction_serializer import LearningInteractionSerializer
-from .mistake_serializer import MistakeSerializer
 from .recommendation_serializer import RecommendationSerializer

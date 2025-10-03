@@ -8,4 +8,7 @@ class DailyXP(models.Model):
     xp = models.IntegerField(default=0)
 
     class Meta:
-        unique_together = ('user', 'date')
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'date'], name='uq_dailyxp_user_date')
+        ]
+        indexes = [models.Index(fields=['user', 'date'])]

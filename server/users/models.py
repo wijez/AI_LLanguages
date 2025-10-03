@@ -35,4 +35,6 @@ class AccountSwitch(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('owner', 'alias')
+        constraints = [
+            models.UniqueConstraint(fields=['owner', 'alias'], name='uq_accountswitch_owner_alias')
+        ]

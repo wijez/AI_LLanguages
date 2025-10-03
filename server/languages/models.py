@@ -22,7 +22,10 @@ class LanguageEnrollment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('user', 'language')
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'language'], name='uq_enrollment_user_language')
+        ]
+        indexes = [models.Index(fields=['user', 'language'])]
 
 
 class Topic(models.Model):
@@ -35,8 +38,11 @@ class Topic(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('language', 'slug')
+        constraints = [
+            models.UniqueConstraint(fields=['language', 'slug'], name='uq_topic_language_slug')
+        ]
         ordering = ['order']
+        indexes = [models.Index(fields=['language', 'order'])]
 
 
 class TopicProgress(models.Model):
@@ -48,7 +54,10 @@ class TopicProgress(models.Model):
     reviewable = models.BooleanField(default=False)
 
     class Meta:
-        unique_together = ('enrollment', 'topic')
+        constraints = [
+            models.UniqueConstraint(fields=['enrollment', 'topic'], name='uq_topicprogress_enrollment_topic')
+        ]
+        indexes = [models.Index(fields=['enrollment', 'completed', 'reviewable'])]
 
 
 class Skill(models.Model):
@@ -59,6 +68,7 @@ class Skill(models.Model):
 
     class Meta:
         ordering = ['order']
+        indexes = [models.Index(fields=['topic', 'order'])]
 
 
 class Lesson(models.Model):
@@ -67,6 +77,9 @@ class Lesson(models.Model):
     content = models.JSONField(null=True, blank=True)
     xp_reward = models.IntegerField(default=10)
     duration_seconds = models.IntegerField(default=120)
+
+    def __str__(self):
+        return self.title
 
 
 class UserSkillStats(models.Model):
@@ -77,14 +90,20 @@ class UserSkillStats(models.Model):
     proficiency_score = models.FloatField(default=0.0) 
 
     class Meta: 
-        unique_together = ('enrollment', 'skill')
+        constraints = [
+            models.UniqueConstraint(fields=['enrollment', 'skill'], name='uq_userskillstats_enrollment_skill')
+        ]
+        indexes = [models.Index(fields=['enrollment', 'skill'])]
 
 
-class SuggestedLesson(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='suggested_lessons')
-    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE)
-    priority_score = models.FloatField(default=0.0)
-    recommended_at = models.DateTimeField(auto_now_add=True)
+# class SuggestedLesson(models.Model):
+#     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='suggested_lessons')
+#     lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE)
+#     priority_score = models.FloatField(default=0.0)
+#     recommended_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        unique_together = ('user', 'lesson')
+#     class Meta:
+#         constraints = [
+#             models.UniqueConstraint(fields=['enrollment', 'skill'], name='uq_userskillstats_enrollment_skill')
+#         ]
+#         indexes = [models.Index(fields=['enrollment', 'skill'])]

@@ -38,6 +38,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'ai_recommend',
+    "rest_framework",
+    "drf_spectacular",
 ]
 
 MIDDLEWARE = [

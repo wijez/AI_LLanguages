@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from vocabulary.models import (
-    AudioAsset,KnownWord , Translation, Word, WordRelation
+    AudioAsset,KnownWord , Translation, Word, WordRelation, Language, LearningInteraction, Mistake
 )
 
 class AudioAssetSerializer(serializers.ModelSerializer):
@@ -22,6 +22,10 @@ class TranslationSerializer(serializers.ModelSerializer):
 
 
 class WordSerializer(serializers.ModelSerializer):
+    language = serializers.SlugRelatedField(
+        slug_field='abbreviation', 
+        queryset=Language.objects.all()
+    )
     class Meta:
         model = Word
         fields = '__all__'
@@ -30,4 +34,16 @@ class WordSerializer(serializers.ModelSerializer):
 class WordRelationSerializer(serializers.ModelSerializer):
     class Meta:
         model = WordRelation
+        fields = '__all__'
+
+
+class LearningInteractionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LearningInteraction
+        fields = '__all__'
+
+
+class MistakeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Mistake
         fields = '__all__'

@@ -5,12 +5,11 @@ from rest_framework.response import Response
 from vocabulary.models import KnownWord
 from languages.models import ( 
     Language, Lesson, LanguageEnrollment, Topic, 
-    TopicProgress, Skill,
-    SuggestedLesson, UserSkillStats
+    TopicProgress, Skill, UserSkillStats
 )
 from languages.serializers import (
     LanguageSerializer, LanguageEnrollmentSerializer, TopicProgressSerializer, TopicSerializer,
-    SkillSerializer, LessonSerializer, SuggestedLessonSerializer, UserSkillStatsSerializer, LanguageEnrollmentExportSerializer
+    SkillSerializer, LessonSerializer, UserSkillStatsSerializer, LanguageEnrollmentExportSerializer
 )
 
 class LanguageViewSet(viewsets.ModelViewSet):
@@ -41,11 +40,6 @@ class TopicProgressViewSet(viewsets.ModelViewSet):
 class SkillViewSet(viewsets.ModelViewSet):
     queryset = Skill.objects.all()
     serializer_class = SkillSerializer
-
-
-class SuggestedLessonViewSet(viewsets.ModelViewSet):
-    queryset = SuggestedLesson.objects.all()
-    serializer_class = SuggestedLessonSerializer
 
 
 class UserSkillStatsViewSet(viewsets.ModelViewSet):

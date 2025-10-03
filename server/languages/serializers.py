@@ -5,7 +5,7 @@ from vocabulary.models import (
 )
 from languages.models import (
     Language, LanguageEnrollment, Lesson, Topic, TopicProgress, Skill,
-    SuggestedLesson, UserSkillStats
+     UserSkillStats
 )
 
 
@@ -42,12 +42,6 @@ class TopicProgressSerializer(serializers.ModelSerializer):
 class SkillSerializer(serializers.ModelSerializer):
     class Meta:
         model = Skill
-        fields = '__all__'
-
-
-class SuggestedLessonSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SuggestedLesson
         fields = '__all__'
 
 
