@@ -22,6 +22,7 @@ router.register(r'topics', TopicViewSet)
 router.register(r'progress', TopicProgressViewSet)
 router.register(r'skills', SkillViewSet)
 
+
 # Vocabulary
 router.register(r'audio-assets', AudioAssetViewSet, basename='audioasset')
 router.register(r'known-words', KnownWordViewSet, basename='knownword')
@@ -41,5 +42,5 @@ router.register(r'leaderboard-entries', LeaderboardEntryViewSet, basename='leade
 
 
 urlpatterns = router.urls + [
-    path(r'export/mistakes', export_mistakes, name='export-mistakes')
+    path("api/export/chat_training.jsonl", export_chat_training, name="export_chat_training"),
 ]

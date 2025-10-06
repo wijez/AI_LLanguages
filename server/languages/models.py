@@ -1,3 +1,4 @@
+from time import timezone
 from django.db import models
 from users.models import User
 
@@ -86,14 +87,113 @@ class UserSkillStats(models.Model):
     enrollment = models.ForeignKey(LanguageEnrollment, on_delete=models.CASCADE,  related_name='skill_stats')
     skill = models.ForeignKey(Skill, on_delete=models.CASCADE)
     xp = models.IntegerField(default=0)
+    total_lessons_completed = models.IntegerField(default=0)
     last_practiced = models.DateTimeField(null=True, blank=True)
     proficiency_score = models.FloatField(default=0.0) 
+    level = models.IntegerField(default=0, help_text="Crown level 0-5")
+    lessons_completed_at_level = models.IntegerField(default=0, help_text="Lessons completed at current level")
+    lessons_required_for_next = models.IntegerField(default=5, help_text="Lessons needed to level up")
+    # Review tracking
+    needs_review = models.BooleanField(default=False)
+    review_reminder_date = models.DateField(null=True, blank=True)
+    STATUS_CHOICES = [
+        ('locked', 'Locked'),
+        ('available', 'Available'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+        ('mastered', 'Mastered'),
+    ]
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='locked')
+    
+    # Timestamps
+    unlocked_at = models.DateTimeField(null=True, blank=True)
+    first_completed_at = models.DateTimeField(null=True, blank=True)
+    mastered_at = models.DateTimeField(null=True, blank=True)
 
     class Meta: 
         constraints = [
-            models.UniqueConstraint(fields=['enrollment', 'skill'], name='uq_userskillstats_enrollment_skill')
+            models.UniqueConstraint(fields=['enrollment', 'skill'], name='uq_userskillstats_enrollment_skill_v2')
         ]
-        indexes = [models.Index(fields=['enrollment', 'skill'])]
+        indexes = [
+            models.Index(fields=['enrollment', 'skill']),
+            models.Index(fields=['enrollment', 'level']),
+            models.Index(fields=['needs_review', 'review_reminder_date']),
+        ]
+    
+    def __str__(self):
+        return f"{self.skill.title} - Level {self.level} ({self.status})"
+    
+    @property
+    def is_maxed(self):
+        """Đã đạt level 5 chưa"""
+        return self.level >= 5
+    
+    @property
+    def progress_to_next_level(self):
+        """% progress to next crown"""
+        if self.is_maxed:
+            return 100
+        return (self.lessons_completed_at_level / self.lessons_required_for_next) * 100
+    
+    def complete_lesson(self, xp_earned=10):
+        """Cập nhật khi hoàn thành một lesson"""
+        self.total_lessons_completed += 1
+        self.lessons_completed_at_level += 1
+        self.xp += xp_earned
+        self.last_practiced = timezone.now()
+        
+        if self.status == 'available':
+            self.status = 'in_progress'
+        
+        # Check for level up
+        if not self.is_maxed and self.lessons_completed_at_level >= self.lessons_required_for_next:
+            self.level_up()
+        
+        # Update proficiency
+        self._update_proficiency()
+        
+        self.save()
+    
+    def level_up(self):
+        """Tăng crown level"""
+        if self.is_maxed:
+            return False
+        
+        self.level += 1
+        self.lessons_completed_at_level = 0
+        
+        # Increase difficulty for next level
+        self.lessons_required_for_next = 5 + (self.level * 2)  # 5, 7, 9, 11, 13
+        
+        if self.level == 5:
+            self.status = 'mastered'
+            self.mastered_at = timezone.now()
+        elif not self.first_completed_at:
+            self.status = 'completed'
+            self.first_completed_at = timezone.now()
+        
+        self.save()
+        return True
+    
+    def _update_proficiency(self):
+        """Cập nhật proficiency score dựa trên level và accuracy"""
+        base_score = self.level * 20  # Each level = 20 points
+        # Add bonus based on completion
+        completion_bonus = min(20, (self.lessons_completed_at_level / self.lessons_required_for_next) * 20)
+        self.proficiency_score = min(100, base_score + completion_bonus)
+    
+    def mark_for_review(self):
+        """Đánh dấu skill cần ôn tập"""
+        self.needs_review = True
+        self.review_reminder_date = timezone.now().date()
+        self.save()
+    
+    def unlock(self):
+        """Mở khóa skill"""
+        if self.status == 'locked':
+            self.status = 'available'
+            self.unlocked_at = timezone.now()
+            self.save()
 
 
 # class SuggestedLesson(models.Model):

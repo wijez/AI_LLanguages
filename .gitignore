@@ -1,2 +1,17 @@
-.venv
-.env
+# venv & IDE
+.venv/
+.env/
+.vscode/
+.idea/
+__pycache__/
+
+# Django artifacts
+*.log
+db.sqlite3
+/media/
+staticfiles/        # nếu dùng collectstatic output
+# hoặc: /static/  (tuỳ cấu trúc dự án)
+
+# Tools caches
+.pytest_cache/
+.mypy_cache/

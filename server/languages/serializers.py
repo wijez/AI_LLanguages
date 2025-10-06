@@ -22,15 +22,19 @@ class LanguageEnrollmentSerializer(serializers.ModelSerializer):
 
 
 class LessonSerializer(serializers.ModelSerializer):
+    skill = serializers.SerializerMethodField()
     class Meta:
         model = Lesson
-        fields = '__all__'
+        fields = ["id","title","content","xp_reward","duration_seconds","skill"]
+    def get_skill(self, obj):
+        return {"id": obj.skill_id, "title": obj.skill.title, "topic": obj.skill.topic.slug}
 
 
 class TopicSerializer(serializers.ModelSerializer):
+    language = serializers.CharField(source="language.abbreviation", read_only=True)
     class Meta:
         model = Topic
-        fields = '__all__'
+        fields = ["id","slug","title","description","order","language","created_at"]
 
 
 class TopicProgressSerializer(serializers.ModelSerializer):
@@ -40,9 +44,10 @@ class TopicProgressSerializer(serializers.ModelSerializer):
 
 
 class SkillSerializer(serializers.ModelSerializer):
+    topic = serializers.SlugRelatedField(slug_field="slug", read_only=True)
     class Meta:
         model = Skill
-        fields = '__all__'
+        fields = ["id","title","description","order","topic"]
 
 
 class UserSkillStatsSerializer(serializers.ModelSerializer):

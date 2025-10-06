@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -167,4 +168,11 @@ CELERY_BEAT_SCHEDULE = {
 
 
 
+# RAG config
+RAG_INDEX_DIR = BASE_DIR / "var/rag_index"
+RAG_TOP_K = 5
+RAG_EMBED_BACKEND = os.getenv("RAG_EMBED_BACKEND", "st")  # 'st' | 'ollama'
+RAG_ST_MODEL = os.getenv("RAG_ST_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "http://localhost:11435")
+RAG_OLLAMA_EMBED_MODEL = os.getenv("RAG_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
 

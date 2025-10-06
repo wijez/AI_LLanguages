@@ -45,6 +45,8 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
+CORS_ALLOWED_ORIGINS = []
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -58,10 +60,12 @@ INSTALLED_APPS = [
     'social',
     'languages',
     'vocabulary',
+    'learning',
     'progress',
     'rest_framework',
     'drf_spectacular',
     'rest_framework_simplejwt',
+    'chat',
 ]
 
 MIDDLEWARE = [
@@ -200,3 +204,11 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
 }
+
+# RAG config
+RAG_INDEX_DIR = BASE_DIR / "var/rag_index"
+RAG_TOP_K = 5
+RAG_EMBED_BACKEND = os.getenv("RAG_EMBED_BACKEND", "st")  # 'st' | 'ollama'
+RAG_ST_MODEL = os.getenv("RAG_ST_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "http://localhost:11435")
+RAG_OLLAMA_EMBED_MODEL = os.getenv("RAG_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
