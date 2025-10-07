@@ -1,16 +1,21 @@
+from datetime import timezone
 import uuid
 from django.db import models
 from django.contrib.auth import get_user_model
 from languages.models import Topic 
 
 
+
 class Conversation(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, blank=True)
-    topic = models.ForeignKey(Topic, on_delete=models.SET_NULL, null=True, blank=True)
-    roleplay = models.JSONField(default=dict, blank=True)
-    status = models.CharField(max_length=16, default='active')
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    topic = models.ForeignKey(Topic, on_delete=models.PROTECT, related_name='conversations')
+    # roleplay config tối giản
+    use_rag = models.BooleanField(default=True)
+    temperature = models.FloatField(default=0.4)
+    max_tokens = models.IntegerField(default=300)
+    suggestions_count = models.IntegerField(default=2)
+    knowledge_limit = models.IntegerField(default=3)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
 
 class Turn(models.Model):
@@ -28,20 +33,3 @@ class Turn(models.Model):
 
     class Meta:
         ordering = ['id']
-
-
-class TopicScript(models.Model):
-    topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name='scripts')
-    step = models.PositiveIntegerField()
-    prompt = models.TextField()
-    hints = models.JSONField(default=dict, blank=True)
-
-    class Meta:
-        unique_together = ('topic', 'step')
-        ordering = ['step']
-
-
-class TopicKnowledge(models.Model):
-    topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name='knowledge')
-    title = models.TextField()
-    content = models.TextField()

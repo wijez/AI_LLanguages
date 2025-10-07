@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Transcribe API</title>
+</head>
+<body>
+    <h2>Ghi âm và kiểm tra phát âm</h2>
+    <p>Chọn Exercise ID:</p>
+    <input type="number" id="exercise_id" value="1">
+    <br><br>
+    <button id="start">Bắt đầu ghi âm</button>
+    <button id="stop" disabled>Dừng ghi âm</button>
+    <audio id="audioPlayback" controls></audio>
+    <pre id="result"></pre>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+
+        const startBtn = document.getElementById('start');
+        const stopBtn = document.getElementById('stop');
+        const audioPlayback = document.getElementById('audioPlayback');
+        const resultPre = document.getElementById('result');
+
+        startBtn.onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+            mediaRecorder.onstop = async () => {
+                const blob = new Blob(audioChunks, { type: 'audio/wav' });
+                audioPlayback.src = URL.createObjectURL(blob);
+
+                const formData = new FormData();
+                formData.append('file', blob);
+                formData.append('exercise_id', document.getElementById('exercise_id').value);
+
+                const res = await fetch('/api/transcribe/', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                resultPre.textContent = JSON.stringify(data, null, 2);
+            };
+
+            mediaRecorder.start();
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+        };
+
+        stopBtn.onclick = () => {
+            mediaRecorder.stop();
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+        };
+    </script>
+</body>
+</html>

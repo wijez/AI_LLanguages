@@ -4,10 +4,10 @@ version = "0.1.0"
 description = ""
 authors = ["wijez <viet.info.43@gmail.com>"]
 readme = "README.md"
-package-mode = false
+# If Poetry < 1.8, comment the next line:
+# package-mode = false
 
 [tool.poetry.dependencies]
-django-restframework = "^0.0.1"
 python = "^3.10"
 django = "^5.2.6"
 djangorestframework = "^3.16.1"
@@ -18,8 +18,9 @@ celery = "^5.5.3"
 redis = "^6.4.0"
 djangorestframework-simplejwt = "^5.5.1"
 drf-spectacular = "^0.28.0"
-psycopg = {extras = ["binary"], version = "^3.2.9"}
+psycopg = { extras = ["binary"], version = "^3.2.9" }
 python-dotenv = "^1.1.1"
+
 # AI and ML dependencies
 openai = "^1.54.0"
 speechrecognition = "^3.10.1"
@@ -28,20 +29,27 @@ pandas = "^2.2.1"
 scikit-learn = "^1.4.1"
 matplotlib = "^3.8.4"
 seaborn = "^0.13.2"
+
 # Audio processing
 librosa = "^0.10.2"
 soundfile = "^0.12.1"
+
 # Web scraping for content
 requests = "^2.32.3"
 beautifulsoup4 = "^4.12.3"
+
 # File handling
 pillow = "^10.2.0"
+
 # Utilities
 python-decouple = "^3.8"
-googletrans = "^4.0.2"
 deep-translator = "^1.11.4"
 httpx = "^0.28.1"
 sentence-transformers = "^5.1.1"
+
+# Vector DB (what you tried to add)
+chromadb = "^1.1.1"
+googletrans = "^4.0.2"
 
 [build-system]
 requires = ["poetry-core"]

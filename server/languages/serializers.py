@@ -22,20 +22,45 @@ class LanguageEnrollmentSerializer(serializers.ModelSerializer):
 
 
 class LessonSerializer(serializers.ModelSerializer):
-    skill = serializers.SerializerMethodField()
+    skill = serializers.SerializerMethodField(read_only=True)
+    skill_id = serializers.IntegerField(write_only=True, required=True)
+
     class Meta:
         model = Lesson
-        fields = ["id","title","content","xp_reward","duration_seconds","skill"]
+        fields = ["id", "title", "content", "xp_reward", "duration_seconds", "skill", "skill_id"]
+        read_only_fields = ["id", "skill"]
+
     def get_skill(self, obj):
-        return {"id": obj.skill_id, "title": obj.skill.title, "topic": obj.skill.topic.slug}
+        s = getattr(obj, "skill", None)
+        return None if not s else {
+            "id": s.id,
+            "title": getattr(s, "title", None) or getattr(s, "name", ""),
+            "topic": getattr(getattr(s, "topic", None), "slug", None),
+        }
+
+    def create(self, validated_data):
+        validated_data["skill_id"] = validated_data.pop("skill_id")
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        sid = validated_data.pop("skill_id", None)
+        if sid is not None:
+            instance.skill_id = sid
+        return super().update(instance, validated_data)
 
 
 class TopicSerializer(serializers.ModelSerializer):
-    language = serializers.CharField(source="language.abbreviation", read_only=True)
+    language = serializers.SlugRelatedField(
+        slug_field="abbreviation",
+        queryset=Language.objects.all()
+    )
+
     class Meta:
         model = Topic
-        fields = ["id","slug","title","description","order","language","created_at"]
-
+        fields = ["id", "slug", "title", "description", "order","golden", "language"]
+        read_only_fields = ["id"]
+    
+ 
 
 class TopicProgressSerializer(serializers.ModelSerializer):
     class Meta:

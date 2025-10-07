@@ -17,11 +17,15 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+from django.conf import settings
+from django.conf.urls.static import static
 
 
 urlpatterns = [
     path("api/users/", include("users.urls")),
     path("api/chat/", include("chat.urls")),
+    path("api/pron/", include("pron.urls")),
+    path("api/", include('speech.urls')),
     path('admin/', admin.site.urls),
     
     path('api/', include('api_urls')), 
@@ -36,3 +40,5 @@ urlpatterns = [
     
 ]
 
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

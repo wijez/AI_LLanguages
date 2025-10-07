@@ -45,7 +45,22 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
-CORS_ALLOWED_ORIGINS = []
+CORS_ALLOW_ALL_ORIGINS = True
+
+# Nếu bạn gửi cookie/session hoặc dùng CSRF:
+CORS_ALLOW_CREDENTIALS = True
+
+# Thường không cần đổi, nhưng nếu cần Authorization header:
+
+# (Tuỳ chọn) Cho phép các method
+from corsheaders.defaults import default_headers
+CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+
+# Nếu dùng CSRF (SessionAuth), cần tin tưởng origin FE:
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 
 # Application definition
 
@@ -66,6 +81,9 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'rest_framework_simplejwt',
     'chat',
+    'pron',
+    'speech',
+    "corsheaders",
 ]
 
 MIDDLEWARE = [
@@ -76,6 +94,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "corsheaders.middleware.CorsMiddleware", 
+    "django.middleware.common.CommonMiddleware",
 ]
 
 ROOT_URLCONF = 'server.urls'
@@ -170,22 +190,55 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Django REST framework configuration
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    # Auth
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticated',
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
     ),
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
-    'PAGE_SIZE': 20,
-    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
-    'DEFAULT_RENDERER_CLASSES': [
-        "rest_framework.renderers.JSONOpenAPIRenderer", 
-        # Nếu cần thêm hỗ trợ khác (ví dụ UI), thêm vào đây
-        # "rest_framework.renderers.BrowsableAPIRenderer",
-        # "rest_framework.renderers.CoreJSONRenderer",
-    ],
+
+    # Pagination
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
+
+    # Schema
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+
+    # Renderers: dùng JSONRenderer cho API, Browsable để debug (tùy chọn).
+    # KHÔNG dùng JSONOpenAPIRenderer làm renderer mặc định cho toàn bộ API.
+    "DEFAULT_RENDERER_CLASSES": (
+        "rest_framework.renderers.JSONRenderer",
+        # "rest_framework.renderers.BrowsableAPIRenderer",  # bật khi dev
+    ),
 }
+
+def assign_tag_from_second_segment(result, generator, request, public):
+    """
+    Gán tag cho từng operation theo segment thứ 2 sau '/api/'.
+    Ví dụ:
+      /api/daily-xp/                 -> "daily-xp"
+      /api/topic-skill/lessons/      -> "topic-skill"
+      /users/login/                  -> "users" (không có /api/ ở đầu)
+    """
+    paths = result.get("paths") or {}
+    for path, methods in paths.items():
+        # tách path thành segment
+        segs = [s for s in path.strip("/").split("/") if s]
+        if not segs:
+            continue
+        # nếu có 'api' ở đầu thì lấy segs[1], ngược lại lấy segs[0]
+        if segs[0].lower() == "api":
+            seg = segs[1] if len(segs) > 1 else "default"
+        else:
+            seg = segs[0]
+
+        # GHI ĐÈ tag cho tất cả method hợp lệ
+        for method, op in methods.items():
+            if method.lower() in ("get", "post", "put", "patch", "delete", "options", "head"):
+                op["tags"] = [seg]  # giữ nguyên kebab-case
+    return result
+
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'DATN API',
@@ -193,6 +246,9 @@ SPECTACULAR_SETTINGS = {
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True, 
+    'POSTPROCESSING_HOOKS': [
+        'server.settings.assign_tag_from_second_segment',
+    ],
 
 }
 
@@ -212,3 +268,6 @@ RAG_EMBED_BACKEND = os.getenv("RAG_EMBED_BACKEND", "st")  # 'st' | 'ollama'
 RAG_ST_MODEL = os.getenv("RAG_ST_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "http://localhost:11435")
 RAG_OLLAMA_EMBED_MODEL = os.getenv("RAG_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
+
+MEDIA_URL = "/media/"
+MEDIA_ROOT = os.path.join(BASE_DIR, "media")

@@ -1,6 +1,7 @@
 from django.shortcuts import render
-from rest_framework import viewsets, mixins
+from rest_framework import viewsets, mixins, status
 from django.utils.dateparse import parse_datetime
+from drf_spectacular.utils import extend_schema, OpenApiExample
 from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from vocabulary.models import KnownWord
@@ -17,14 +18,37 @@ class LanguageViewSet(viewsets.ModelViewSet):
     queryset = Language.objects.all()
     serializer_class = LanguageSerializer
 
+    @action(detail=False, methods=['post'], url_path='bulk')
+    def bulk_create(self, request):
+        if not isinstance(request.data, list):
+            return Response({"detail": "Expected a list of objects."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        ser = LanguageSerializer(data=request.data, many=True)
+        ser.is_valid(raise_exception=True)
+
+        # upsert theo abbreviation (giả định là unique)
+        created_or_existing = []
+        for item in ser.validated_data:
+            obj, _ = Language.objects.get_or_create(
+                abbreviation=item["abbreviation"],
+                defaults=item
+            )
+            # nếu đã tồn tại và muốn cập nhật thêm field:
+            # for k, v in item.items(): setattr(obj, k, v); obj.save(update_fields=item.keys())
+            created_or_existing.append(obj)
+
+        return Response(LanguageSerializer(created_or_existing, many=True).data,
+                        status=status.HTTP_201_CREATED)
+
 
 class LanguageEnrollmentViewSet(viewsets.ModelViewSet):
     queryset = LanguageEnrollment.objects.all()
     serializer_class = LanguageEnrollmentSerializer
 
 
-class LessonViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    queryset = Lesson.objects.select_related("skill","skill__topic").all().order_by("id")
+class LessonViewSet(viewsets.ModelViewSet):
+    queryset = Lesson.objects.select_related("skill", "skill__topic").order_by("id")
     serializer_class = LessonSerializer
 
     def get_queryset(self):
@@ -38,9 +62,32 @@ class LessonViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.G
         return qs
 
 
-class TopicViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class TopicViewSet(viewsets.ModelViewSet):
+    queryset = Topic.objects.all()
+    serializer_class = TopicSerializer
+
+    def create(self, request, *args, **kwargs):
+        # Hỗ trợ cả single (dict) và bulk (list)
+        many = isinstance(request.data, list)
+        serializer = self.get_serializer(data=request.data, many=many)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data if not many else None)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class TopicSkillViewSet(mixins.ListModelMixin,
+                   mixins.RetrieveModelMixin,
+                   mixins.CreateModelMixin,            # <-- thêm mixin tạo mới
+                   viewsets.GenericViewSet):
     queryset = Topic.objects.select_related("language").all().order_by("order","id")
     serializer_class = TopicSerializer
+
+    def get_serializer_class(self):
+        # dùng serializer khác khi POST
+        if self.request and self.request.method == "POST":
+            return TopicSerializer
+        return TopicSerializer
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -50,8 +97,31 @@ class TopicViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         ua = self.request.query_params.get("updated_after")
         if ua:
             dt = parse_datetime(ua)
-            if dt: qs = qs.filter(created_at__gte=dt) 
+            if dt:
+                qs = qs.filter(created_at__gte=dt)
         return qs
+
+    @extend_schema(
+        tags=["Topics"],
+        summary="Create a Topic",
+        request=TopicSerializer,
+        responses={201: TopicSerializer},
+        examples=[
+            OpenApiExample(
+                "Create topic",
+                value={
+                    "slug": "a1-greetings",
+                    "title": "A1 - Basic Greetings",
+                    "description": "Learn simple greetings, introductions, and polite expressions.",
+                    "language": 1,          # id của Language
+                    "order": 1
+                },
+                request_only=True
+            )
+        ]
+    )
+    def create(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
 
     @action(detail=True, methods=["get"])
     def skills(self, request, pk=None):

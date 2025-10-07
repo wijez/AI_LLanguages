@@ -1,12 +1,7 @@
-# chat/serializers.py
 from rest_framework import serializers
+from .models import Conversation, Turn
 from languages.models import Topic
-from chat.models import Conversation, Turn
-
-class TopicSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Topic
-        fields = ['id','slug','title','description']
+from languages.serializers import TopicSerializer
 
 class TurnSerializer(serializers.ModelSerializer):
     class Meta:
@@ -15,39 +10,54 @@ class TurnSerializer(serializers.ModelSerializer):
 
 class ConversationSerializer(serializers.ModelSerializer):
     topic = TopicSerializer()
-    turns = TurnSerializer(many=True)
     class Meta:
         model = Conversation
-        fields = ['id','topic','roleplay','created_at','turns']
+        fields = [
+            'id','topic','use_rag','max_tokens','temperature',
+            'knowledge_limit','suggestions_count','created_at'
+        ]
 
-class StartPayloadSerializer(serializers.Serializer):
-    topic_id = serializers.IntegerField(required=False)
-    topic_slug = serializers.CharField(required=False)
-    topic_title = serializers.CharField(required=False)
-    language_override = serializers.CharField(required=False)
-    mode = serializers.CharField(required=False, default='free')
-    temperature = serializers.FloatField(required=False, default=0.7)
-    max_tokens = serializers.IntegerField(required=False, default=512)
+# --- Requests
+class StartRequestSerializer(serializers.Serializer):
+    topic_slug = serializers.SlugField()
+    mode = serializers.CharField(default='roleplay')
+    temperature = serializers.FloatField(required=False, default=0.4)
+    max_tokens = serializers.IntegerField(required=False, default=300)
     suggestions_count = serializers.IntegerField(required=False, default=2)
-    use_rag = serializers.BooleanField(required=False, default=False)
+    use_rag = serializers.BooleanField(required=False, default=True)
     knowledge_limit = serializers.IntegerField(required=False, default=3)
-    roleplay_overrides = serializers.JSONField(required=False)
-
-      # === NEW: params bổ sung ===
-    # Neo theo Skill/Lesson (nếu muốn khoanh vùng nội dung)
-    skill_title = serializers.CharField(required=False)     # ví dụ "Hello & Goodbye"
-    lesson_id = serializers.IntegerField(required=False)    # id lesson cụ thể (ưu tiên nếu có)
-
-    # Điều khiển RAG chi tiết
-    rag_skill = serializers.CharField(required=False)       # filter RAG theo skill title
-    rag_k = serializers.IntegerField(required=False, default=3, min_value=1, max_value=20)
-
-    # Tùy biến system prompt
+    rag_skill = serializers.CharField(required=False, allow_blank=True)
+    rag_k = serializers.IntegerField(required=False, default=5)
+    skill_title = serializers.CharField(required=False, allow_blank=True)
     system_extra = serializers.CharField(required=False, allow_blank=True)
-
-    # Tên hiển thị (nếu bạn muốn đặt tên cuộc hội thoại — chỉ lưu trong roleplay/meta)
+    language_override = serializers.CharField(required=False, default='vi')
     conv_name = serializers.CharField(required=False, allow_blank=True)
 
-class MessagePayloadSerializer(serializers.Serializer):
+class MessageRequestSerializer(serializers.Serializer):
     conv_id = serializers.UUIDField()
-    user_text = serializers.CharField()
+    user_text = serializers.CharField(allow_blank=True, allow_null=True, required=False, default='')
+    expect_text = serializers.CharField(required=False, allow_blank=True, default='')
+    force_pron  = serializers.BooleanField(required=False, default=False)
+    
+# --- Responses
+class StartResponseSerializer(serializers.Serializer):
+    id = serializers.UUIDField(source='conversation.id')
+    topic = TopicSerializer()
+    roleplay = serializers.SerializerMethodField()
+    created_at = serializers.DateTimeField(source='conversation.created_at')
+    turns = TurnSerializer(many=True)
+
+    def get_roleplay(self, obj):
+        c = obj['conversation']
+        return {
+            'temperature': c.temperature,
+            'max_tokens': c.max_tokens,
+            'suggestions_count': c.suggestions_count,
+            'use_rag': c.use_rag,
+            'knowledge_limit': c.knowledge_limit,
+        }
+
+class MessageResponseSerializer(serializers.Serializer):
+    reply = serializers.CharField()
+    meta = serializers.DictField()
+    conversation = ConversationSerializer()

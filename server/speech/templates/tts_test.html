@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Exercise Listening Test</title>
+<style>
+  body { font-family: Arial; padding: 20px; }
+  .word { cursor: pointer; margin-right: 5px; color: blue; }
+  .word:hover { text-decoration: underline; }
+  .speaker { cursor: pointer; margin-left: 10px; }
+  #status { margin-top: 10px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Exercise Test (Sublesson 2)</h1>
+
+<div id="exerciseContainer"></div>
+
+<p id="status">Trạng thái: chờ</p>
+
+<script>
+async function loadExercise() {
+    const res = await fetch('/api/exercises/');
+    const data = await res.json();
+
+    // Lọc sublesson = 2
+    const exercises = data.results.filter(ex => ex.sublesson === 2);
+    const container = document.getElementById('exerciseContainer');
+    container.innerHTML = "";
+
+    exercises.forEach(ex => {
+        const exDiv = document.createElement('div');
+        exDiv.dataset.id = ex.id;
+        exDiv.dataset.maxAttempts = ex.max_attempts;
+        exDiv.dataset.attempts = 0;
+
+        const contentDiv = document.createElement('div');
+        contentDiv.innerHTML = ex.content.split(" ").map(word => {
+            const hint = ex.hints.find(h => h.word_in_exercise === word);
+            const lang = hint ? hint.language_code : ex.language_code;
+            return `<span class="word" data-word="${word}" data-lang="${lang}">${word}</span>`;
+        }).join(" ");
+        exDiv.appendChild(contentDiv);
+
+        // Nút loa
+        const speakerBtn = document.createElement('span');
+        speakerBtn.textContent = '🔊';
+        speakerBtn.className = 'speaker';
+        speakerBtn.onclick = () => speakText(ex.content, ex.language_code);
+        exDiv.appendChild(speakerBtn);
+
+        // Sự kiện click từng chữ
+        contentDiv.querySelectorAll('.word').forEach(el => {
+            el.addEventListener('click', () => {
+                speakText(el.dataset.word, el.dataset.lang);
+            });
+        });
+
+        container.appendChild(exDiv);
+    });
+}
+
+function speakText(text, lang='en') {
+    fetch('/api/tts/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, lang })
+    })
+    .then(res => res.blob())
+    .then(blob => {
+        const audioURL = URL.createObjectURL(blob);
+        const audio = new Audio(audioURL);
+        audio.play();
+    });
+}
+
+// Test Transcribe (giả lập người đọc)
+async function testTranscribe(exerciseId, spokenText) {
+    const formData = new FormData();
+    const blob = new Blob([spokenText], {type:'audio/wav'}); // giả lập file
+    formData.append("file", blob, "record.wav");
+    formData.append("exercise_id", exerciseId);
+
+    const res = await fetch('/api/transcribe/', { method: 'POST', body: formData });
+    const data = await res.json();
+    console.log(data); // {spoken_text, best_match, accuracy}
+
+    // Lấy exercise div
+    const exDiv = document.querySelector(`div[data-id="${exerciseId}"]`);
+    let attempts = parseInt(exDiv.dataset.attempts);
+    const maxAttempts = parseInt(exDiv.dataset.maxAttempts);
+
+    if (data.accuracy.replace('%','') >= 60) {
+        document.getElementById('status').textContent = `Đúng! Accuracy: ${data.accuracy}`;
+        exDiv.dataset.completed = true;
+    } else {
+        attempts += 1;
+        exDiv.dataset.attempts = attempts;
+        if (attempts >= maxAttempts) {
+            document.getElementById('status').textContent = `Sai quá ${maxAttempts} lần. Phải làm lại bài tập!`;
+        } else {
+            document.getElementById('status').textContent = `Sai, thử lại. Lần thử: ${attempts}/${maxAttempts}`;
+        }
+    }
+}
+
+loadExercise();
+</script>
+</body>
+</html>
