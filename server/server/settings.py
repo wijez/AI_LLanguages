@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     'chat',
     'pron',
     'speech',
+    "recommend",
     "corsheaders",
 ]
 
@@ -140,8 +141,9 @@ DATABASES = {
         'NAME': 'be_db',
         'USER': 'postgres',
         'PASSWORD': 'portgasDace',
-        'HOST': 'localhost',   # kết nối ra container
-        'PORT': '5433',        # cổng map từ docker-compose
+        'HOST': '127.0.0.1',   # kết nối ra container
+        'PORT': '5543',    
+        "OPTIONS": {"options": "-c search_path=public"},     # cổng map từ docker-compose
     }
 }
 
@@ -193,6 +195,7 @@ REST_FRAMEWORK = {
     # Auth
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # "rest_framework.authentication.SessionAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -241,7 +244,7 @@ def assign_tag_from_second_segment(result, generator, request, public):
 
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'DATN API',
+    'TITLE': 'BE API',
     'DESCRIPTION': 'API documentation for DATN project',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
@@ -268,6 +271,12 @@ RAG_EMBED_BACKEND = os.getenv("RAG_EMBED_BACKEND", "st")  # 'st' | 'ollama'
 RAG_ST_MODEL = os.getenv("RAG_ST_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "http://localhost:11435")
 RAG_OLLAMA_EMBED_MODEL = os.getenv("RAG_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
+RAG_SCORE_THRESH = 0.25
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
+
+
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "") 
+
+

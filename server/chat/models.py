@@ -15,6 +15,9 @@ class Conversation(models.Model):
     max_tokens = models.IntegerField(default=300)
     suggestions_count = models.IntegerField(default=2)
     knowledge_limit = models.IntegerField(default=3)
+    # mission = models.TextField(blank=True, default="")          
+    # specified_task = models.TextField(blank=True, default="")    
+    # context = models.JSONField(blank=True, default=list) 
     created_at = models.DateTimeField(auto_now_add=True)
 
 

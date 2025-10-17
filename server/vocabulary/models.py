@@ -182,13 +182,22 @@ class LearningInteraction(models.Model):
     word = models.ForeignKey(Word, on_delete=models.SET_NULL, null=True, blank=True)
     skill = models.ForeignKey(Skill, on_delete=models.SET_NULL, null=True, blank=True)
     action = models.CharField(max_length=50, choices=ACTIONS)
+    value = models.FloatField(null=True, blank=True, help_text="điểm số/tỉ lệ đúng nếu có")
     success = models.BooleanField(default=True)
     duration_seconds = models.IntegerField(default=0)
     xp_earned = models.IntegerField(default=0)
+    meta = models.JSONField(blank=True, default=dict)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=['user', 'created_at'])]
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['enrollment', 'created_at']),
+            models.Index(fields=['skill', 'created_at']),
+            models.Index(fields=['lesson', 'created_at']),
+            models.Index(fields=['action']),
+            ]
+        ordering = ['-created_at']
 
 
 class Mistake(models.Model):
@@ -198,6 +207,7 @@ class Mistake(models.Model):
         ("vocab", "Vocabulary"),
         ("listening", "Listening"),
         ("spelling", "Spelling"),
+        ('other', 'Other'),
     ]
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="mistakes")
     enrollment = models.ForeignKey(LanguageEnrollment, on_delete=models.CASCADE, related_name="mistakes")

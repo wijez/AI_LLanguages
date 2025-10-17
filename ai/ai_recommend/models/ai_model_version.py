@@ -12,10 +12,17 @@ class AIModelVersion(models.Model):
 
 
 class TrainingRun(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "pending"),
+        ("running", "running"),
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+    ]
+
     model = models.ForeignKey(AIModelVersion, on_delete=models.CASCADE, related_name='training_runs')
     started_at = models.DateTimeField(default=timezone.now)
     finished_at = models.DateTimeField(null=True, blank=True)
-    status = models.CharField(max_length=20, default='running')  # running/succeeded/failed
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     parameters = models.JSONField(blank=True, null=True)         # hyperparams
     metrics = models.JSONField(blank=True, null=True)            # e.g. rmse, map@k
     dataset_snapshot = models.CharField(max_length=255, blank=True)  # optional: path to parquet/csv

@@ -68,3 +68,24 @@ class VerifyCodeSerializer(serializers.Serializer):
 
 class ResendVerifyCodeSerializer(serializers.Serializer):
     username = serializers.CharField()
+
+
+class UserMeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "avatar",
+            "bio",
+            "is_active",
+            "is_staff",
+            "is_superuser",
+            "last_login",
+            "last_active",
+            "date_joined",
+        )
+        read_only_fields = fields

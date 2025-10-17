@@ -12,9 +12,11 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(Path(r"D:\AI_LL\.env"), override=True)
 
 
 # Quick-start development settings - unsuitable for production
@@ -83,7 +85,7 @@ DATABASES = {
         'USER': 'postgres',
         'PASSWORD': 'portgasDace',
         'HOST': 'localhost',
-        'PORT': '5434',
+        'PORT': '5544',
     }
 }
 
@@ -132,7 +134,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',   
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -149,7 +151,7 @@ REST_FRAMEWORK = {
 }
 
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'DATN API',
+    'TITLE': 'AI API',
     'DESCRIPTION': 'API documentation for DATN project',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
@@ -175,4 +177,29 @@ RAG_EMBED_BACKEND = os.getenv("RAG_EMBED_BACKEND", "st")  # 'st' | 'ollama'
 RAG_ST_MODEL = os.getenv("RAG_ST_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "http://localhost:11435")
 RAG_OLLAMA_EMBED_MODEL = os.getenv("RAG_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
+
+
+BE_API_BASE_URL = "http://localhost:8000/"
+BE_API_TOKEN="xxx"
+BE_API_KEY="YYY"
+
+BE_JWT_USERNAME = os.getenv("BE_JWT_USERNAME", "test1")
+BE_JWT_PASSWORD = os.getenv("BE_JWT_PASSWORD", "string")
+BE_JWT_TOKEN_URL = os.getenv("BE_JWT_TOKEN_URL", "/api/users/login/")
+BE_JWT_REFRESH_URL = os.getenv("BE_JWT_REFRESH_URL", "/api/users/login/")
+
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    # "ALGORITHM": "HS256",  # mặc định HS256
+    # "SIGNING_KEY": SECRET_KEY,  # mặc định dùng SECRET_KEY của Django
+}
+
+MINIO_ENDPOINT   = os.getenv("MINIO_ENDPOINT")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
+MINIO_BUCKET     = os.getenv("MINIO_BUCKET", "ai-snapshots")
+MODEL_DIR        = BASE_DIR / "models"
 

@@ -1,60 +1,74 @@
-# import requests
-# from django.conf import settings
-# from django.utils import timezone
-# from rest_framework.decorators import api_view
-# from rest_framework.response import Response
-# from ..models import Recommendation
-# from server.vocabulary.models import LearningInteraction, Mistake
-# from server.vocabulary.serializers import LearningInteractionSerializer, MistakeSerializer
+# ai/ai_recommend/viewsets/sync_data.py 
+import os
+import json, time, hashlib, traceback
+from rest_framework import status, permissions
+from django.conf import settings
+from django.http import JsonResponse
+from django.views import View
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from ..ml.trainer import train_from_snapshot
+from django.utils import timezone
+from django.db import transaction
+from ..models import AIModelVersion, TrainingRun
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from typing import Any, Dict
+from rest_framework.permissions import IsAuthenticated
 
 
-# BE_EXPORT_URL = "http://127.0.0.1:8000/api/export_learning_data/"
+class SnapshotIngestJWTView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request):
+        # optional: lưu manifest vào DB nếu muốn
+        return Response({"ok": True})
 
 
-# @api_view(["POST"])
-# def sync_learning_data(request):
-#     """
-#     Gọi API BE để sync dữ liệu học tập về AI DB
-#     """
-#     try:
-#         resp = requests.get(BE_EXPORT_URL, timeout=30)
-#         resp.raise_for_status()
-#     except Exception as e:
-#         return Response({"error": str(e)}, status=500)
+class TrainView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
-#     data = resp.json().get("enrollments", [])
-#     saved = 0
+    def post(self, request, *args, **kwargs):
+        payload: Dict[str, Any] = request.data or {}
+        snapshot_id = payload.get("snapshot_id")
+        params = payload.get("params") or {}
 
-#     for e in data:
-#         # log 1 interaction đại diện cho enrollment này
-#         li = LearningInteraction.objects.create(
-#             user_id=e["user_id"],
-#             enrollment_id=e["id"],
-#             action="sync_enrollment",
-#             success=True,
-#             duration_seconds=0,
-#             xp_earned=e.get("total_xp", 0),
-#         )
+        if not snapshot_id:
+            return Response({"detail": "snapshot_id required"}, status=400)
 
-#         # Known words -> Mistakes
-#         for w in e.get("known_words", []):
-#             Mistake.objects.create(
-#                 user_id=e["user_id"],
-#                 enrollment_id=e["id"],
-#                 prompt=f"Word {w['word_id']}",   # tạm thời log dạng text
-#                 mispronounced_words=[w["word_id"]],
-#                 timestamp=timezone.now()
-#             )
+        try:
+            # Train and get artifact + metrics
+            meta = train_from_snapshot(snapshot_id, params)
+            artifact_uri = meta["artifact_uri"]
+            features = meta["features"]
+            val_auc = meta["val_auc"]
 
-#         # Skills -> Recommendations
-#         for s in e.get("skills", []):
-#             Recommendation.objects.create(
-#                 user_id=e["user_id"],
-#                 enrollment_id=e["id"],
-#                 skill_id=s["skill_id"],
-#                 priority_score=max(0, 1 - s.get("proficiency", 0)),
-#             )
+            # Create a model version row
+            version_name = os.path.basename(artifact_uri)
+            model = AIModelVersion.objects.create(
+                name="GBM",
+                version=version_name,
+                description=json.dumps({"val_auc": val_auc, "snapshot_id": snapshot_id})
+            )
 
-#         saved += 1
+            # Create a TrainingRun linked to model (FK REQUIRED by your schema)
+            run = TrainingRun.objects.create(
+                model=model,
+                status="succeeded",
+                started_at=timezone.now(),
+                finished_at=timezone.now(),
+                parameters=params,
+                dataset_snapshot=snapshot_id,
+                metrics={
+                    "val_auc": val_auc,
+                    "artifact_uri": artifact_uri,
+                    "features": features,
+                },
+            )
 
-#     return Response({"synced": saved})
+            return Response({"ok": True, "training_run_id": run.id, "metrics": run.metrics}, status=200)
+
+        except Exception as e:
+            return Response(
+                {"detail": f"train failed: {e}", "trace": traceback.format_exc()[:4000]},
+                status=500
+            )

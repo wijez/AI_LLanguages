@@ -1,4 +1,4 @@
-from time import timezone
+from django.utils import timezone
 from django.db import models
 from users.models import User
 
@@ -45,6 +45,9 @@ class Topic(models.Model):
         ordering = ['order']
         indexes = [models.Index(fields=['language', 'order'])]
 
+    def __str__(self):
+        return f'{self.title}({self.language})'
+
 
 class TopicProgress(models.Model):
     enrollment = models.ForeignKey(LanguageEnrollment, on_delete=models.CASCADE, related_name='topic_progress')
@@ -62,25 +65,77 @@ class TopicProgress(models.Model):
 
 
 class Skill(models.Model):
-    topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name='skills')
+    class SkillType(models.TextChoices):
+        LISTENING = "listening", "Listening"
+        SPEAKING  = "speaking",  "Speaking"
+        READING   = "reading",   "Reading"
+        WRITING   = "writing",   "Writing"
+        MATCHING  = "matching",  "Matching"   # ghép từ / nối cặp
+        FILLGAP   = "fillgap",   "Fill in the blanks"
+        ORDERING  = "ordering",  "Reorder words"
+        QUIZ      = "quiz",      "Generic MCQ/QA"
+        PRON      = "pron",      "Pronunciation"
+
+    # Skill dùng chung nhiều lesson (B2)
     title = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=150, blank=True)
     description = models.TextField(blank=True)
-    order = models.IntegerField(default=0)
+
+    # Thuộc tính quan trọng cho “bài tập”
+    type = models.CharField(max_length=32, choices=SkillType.choices,  default=SkillType.QUIZ)
+    content = models.JSONField(null=True, blank=True)  # chứa cấu trúc exercises
+    xp_reward = models.IntegerField(default=10)
+    duration_seconds = models.IntegerField(default=90)
+    difficulty = models.PositiveSmallIntegerField(default=1)  # 1..5
+    language_code = models.CharField(max_length=10, default="en")  # en/vi/…
+
+    # Metadata
+    tags = models.JSONField(default=list, blank=True)  # ["A1","greetings"]
+    is_active = models.BooleanField(default=True)
 
     class Meta:
-        ordering = ['order']
-        indexes = [models.Index(fields=['topic', 'order'])]
+        ordering = ["id"]
+        indexes = [models.Index(fields=["type"]), models.Index(fields=["language_code"])]
+
+    def __str__(self):
+        return f"{self.title} [{self.type}]"
 
 
 class Lesson(models.Model):
-    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name='lessons')
+    topic = models.ForeignKey("Topic", on_delete=models.CASCADE, related_name="lessons")
     title = models.CharField(max_length=255)
-    content = models.JSONField(null=True, blank=True)
+    content = models.JSONField(null=True, blank=True)  # optional: mô tả chung
+    order = models.IntegerField(default=0)
     xp_reward = models.IntegerField(default=10)
     duration_seconds = models.IntegerField(default=120)
 
+    # Liên kết N–N tới skill (có thứ tự hiển thị trong 1 lesson)
+    skills = models.ManyToManyField(Skill, related_name="lessons", through="LessonSkill")
+
+    class Meta:
+        ordering = ["order", "id"]
+        indexes = [models.Index(fields=["topic", "order"])]
+
     def __str__(self):
         return self.title
+
+
+class LessonSkill(models.Model):
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE)
+    skill  = models.ForeignKey(Skill, on_delete=models.CASCADE)
+    order  = models.IntegerField(default=0)
+
+    class Meta:
+        unique_together = ("lesson", "skill")
+        ordering = ["order", "id"]
+        indexes = [
+            models.Index(fields=["lesson", "order"]),
+            models.Index(fields=["skill", "order"]),
+        ]
+
+    def __str__(self):
+        return f"{self.lesson} ↔ {self.skill} (#{self.order})"
+
 
 
 class UserSkillStats(models.Model):

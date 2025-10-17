@@ -1,6 +1,4 @@
-from ast import mod
 from django.utils import timezone
-from turtle import update
 from django.db import models
 from users.models import User
 
@@ -28,7 +26,7 @@ class Friend(models.Model):
 
 
 class CalendarEvent(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='calender_events')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='calendar_events')
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     start = models.DateTimeField()
@@ -45,4 +43,6 @@ class LeaderboardEntry(models.Model):
     xp = models.IntegerField()
 
     class Meta:
-        indexes = [models.Index(fields=['language', 'date', 'xp'])]
+        constraints = [
+            models.UniqueConstraint(fields=['user','language','date'], name='uq_leaderboard_user_lang_date')
+        ]

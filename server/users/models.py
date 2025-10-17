@@ -15,7 +15,7 @@ class User(AbstractUser):
         null=True
     )
     last_active = models.DateTimeField(default=timezone.now)
-
+    
 
 class AccountSetting(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='settings')

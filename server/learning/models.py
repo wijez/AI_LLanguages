@@ -70,7 +70,7 @@ class LessonSession(models.Model):
         """Check session còn active không (trong 30 phút)"""
         if self.status != 'in_progress':
             return False
-        return (timezone.now() - self.last_activity).seconds < 1800  # 30 minutes
+        return (timezone.now() - self.last_activity).total_seconds() < 1800
     
     def complete_session(self, final_xp=None):
         """Hoàn thành session và cập nhật rewards"""
@@ -79,7 +79,7 @@ class LessonSession(models.Model):
         
         self.status = 'completed'
         self.completed_at = timezone.now()
-        self.duration_seconds = (self.completed_at - self.started_at).seconds
+        self.duration_seconds = int((self.completed_at - self.started_at).total_seconds())
         
         # Check perfect lesson
         if self.incorrect_answers == 0 and self.total_questions > 0:

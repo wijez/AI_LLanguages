@@ -19,9 +19,10 @@ router.register(r'languages', LanguageViewSet)
 router.register(r'enrollments', LanguageEnrollmentViewSet)
 router.register(r'lessons', LessonViewSet)
 router.register(r'topics', TopicViewSet, basename='topic')
-router.register(r'topic-skill', TopicSkillViewSet, basename='topic-skills')
+router.register(r'skills', SkillViewSet, basename='skill')
 router.register(r'progress', TopicProgressViewSet)
-router.register(r'skills', SkillViewSet)
+router.register(r'user-skill-stats', UserSkillStatsViewSet, basename='user-skill-stats')
+router.register(r"skill-stats", SkillStatsViewSet, basename="skill-stats")
 
 
 # Vocabulary
@@ -43,5 +44,6 @@ router.register(r'leaderboard-entries', LeaderboardEntryViewSet, basename='leade
 
 
 urlpatterns = router.urls + [
-    path("api/export/chat_training.jsonl", export_chat_training, name="export_chat_training"),
+    path('me/',  MeView.as_view(), name="read-me"),
+    path("export/chat_training.jsonl", export_chat_training, name="export_chat_training"),
 ]

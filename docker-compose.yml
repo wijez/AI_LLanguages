@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: portgasDace
     ports:
-      - "5433:5432"   # BE Postgres exposed on 5433
+      -  "5543:5432"    
     volumes:
       - be_data:/var/lib/postgresql/data
     networks:
@@ -26,7 +26,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: portgasDace
     ports:
-      - "5434:5432"   # AI Postgres exposed on 5434
+      - "5544:5432"   # AI Postgres exposed on 5434
     volumes:
       - ai_data:/var/lib/postgresql/data
     networks:
@@ -59,33 +59,25 @@ services:
     volumes:
       - ollama:/root/.ollama
 
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    restart: unless-stopped
-    # run as root to avoid getpwuid(1000) failure in WSL
-    user: "0:0"
-    depends_on:
-      ollama:
-        condition: service_healthy
-    ports: ["3000:8080"]
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server --console-address ":9001" /data
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      # Optional: turn off auth to test UI quickly
-      # - WEBUI_AUTH=False
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
     volumes:
-      - openwebui:/app/backend/data
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
+      - minio-data:/data
+    networks:
+      - datn_net
 volumes:
   ollama:
   openwebui:
   be_data:
   ai_data:
+  minio-data:
 
 networks:
   datn_net:

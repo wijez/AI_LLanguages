@@ -4,7 +4,7 @@ from rest_framework import viewsets
 from rest_framework import status, generics
 from rest_framework.response import Response
 from django.core.mail import send_mail
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from rest_framework.views import APIView
 from utils.gencode import generate_verify_code, get_tokens_for_user
@@ -16,7 +16,7 @@ from users.models import (
 )
 
 from users.serializers import (
-    UserSerializer, AccountSettingSerializer, AccountSwitchSerializer, RegisterSerializer,
+    UserMeSerializer, UserSerializer, AccountSettingSerializer, AccountSwitchSerializer, RegisterSerializer,
     VerifyCodeSerializer, ResendVerifyCodeSerializer, LoginSerializer, ForgotPasswordSerializer
 )
 
@@ -150,3 +150,10 @@ class ResendVerifyCodeView(APIView):
             "message": "Verify code resent successfully",
             "verify_code": user.verify_code
         }, status=status.HTTP_200_OK)
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(UserMeSerializer(request.user, context={"request": request}).data)

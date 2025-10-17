@@ -3,6 +3,8 @@ from rest_framework import viewsets
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from utils.permissions import HasInternalApiKey
 from vocabulary.models import (
     AudioAsset,KnownWord , Translation, Word, WordRelation, LearningInteraction, Mistake
 )
@@ -61,11 +63,13 @@ class WordRelationViewSet(viewsets.ModelViewSet):
 
 
 class LearningInteractionViewSet(viewsets.ModelViewSet):
+    permission_classes = [HasInternalApiKey | IsAuthenticated]
     queryset = LearningInteraction.objects.all()
     serializer_class = LearningInteractionSerializer
 
 
 class MistakeViewSet(viewsets.ModelViewSet):
+    permission_classes = [HasInternalApiKey | IsAuthenticated]
     queryset = Mistake.objects.all()
     serializer_class = MistakeSerializer
 
