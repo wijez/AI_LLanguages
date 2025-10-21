@@ -1,14 +1,18 @@
+# views.py
 import json
 import asyncio
 from typing import Optional, List, Dict, Any
+from .rag.retriever import get_index 
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from django.http import HttpResponseBadRequest, StreamingHttpResponse
+from django.http import StreamingHttpResponse
 
 from .models import Conversation, Turn
-from languages.models import Topic
+from languages.models import Topic, Skill  
 from .serializers import (
     StartRequestSerializer, StartResponseSerializer,
     MessageRequestSerializer, MessageResponseSerializer,
@@ -16,16 +20,14 @@ from .serializers import (
 )
 from .utils import simple_reply
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes, OpenApiExample
-from .rag.retriever import Retriever, format_rag_snippet
-from .services.llm import call_llm, stream_llm_sync, build_system_prompt   
+
+# RAG (bản mới)
+from .rag.retriever import get_index  # ✅ thay cho Retriever.ensure()
+from .services.llm import call_llm, stream_llm_sync, build_system_prompt
 
 
-# ---- history helper (thêm last_n) ----
+# ---- helpers ----
 def _turns_to_history(conv, last_n: Optional[int] = None) -> List[Dict[str, str]]:
-    """
-    Trả về list[dict] các turn (user/assistant) theo thứ tự thời gian tăng dần.
-    Nếu last_n được set, chỉ lấy N lượt gần nhất để tối ưu độ trễ.
-    """
     qs = (Turn.objects
           .filter(conversation=conv)
           .exclude(role='system')
@@ -33,9 +35,24 @@ def _turns_to_history(conv, last_n: Optional[int] = None) -> List[Dict[str, str]
           .values('role', 'content'))
     rows = list(qs)
     if last_n and last_n > 0:
-        # mỗi lượt gồm 1 user + 1 assistant (thường), nhưng để đơn giản: cắt theo count mẫu tin
         rows = rows[-last_n:]
     return rows
+
+
+def _format_rag_snippet(hits: List[Dict], max_items: int = 3, max_len: int = 350) -> str:
+    """
+    hits: [{"text": "...", "score": float, "meta": {...}}, ...]
+    Trả về chuỗi context gọn cho system prompt.
+    """
+    out = []
+    for i, h in enumerate(hits[:max_items], start=1):
+        txt = (h.get("text") or "").strip()
+        if len(txt) > max_len:
+            txt = txt[:max_len].rsplit(" ", 1)[0] + "…"
+        meta = h.get("meta") or {}
+        tag = f"{meta.get('topic_slug','?')} / L{meta.get('lesson_order','?')} / {meta.get('skill_title','?')}"
+        out.append(f"[{i}] ({h.get('score',0):.3f}) {tag}: {txt}")
+    return "\n".join(out)
 
 
 class ChatViewSet(viewsets.ViewSet):
@@ -93,7 +110,10 @@ class ChatViewSet(viewsets.ViewSet):
             knowledge_limit=data.get('knowledge_limit', 3),
         )
 
-        topic_dict = {"title": topic.title, "language": data.get('language_override', 'en')}
+        topic_dict = {
+            "title": topic.title,
+            "language": data.get('language_override', getattr(topic.language, "abbreviation", "en"))
+        }
         system_prompt = build_system_prompt(
             topic=topic_dict,
             mode=data.get('mode', 'roleplay'),
@@ -116,18 +136,21 @@ class ChatViewSet(viewsets.ViewSet):
         summary="Send message / get AI reply (LLM)",
         description=(
             "Gửi tin nhắn theo conv_id, server gọi LLM (Ollama) với system+history. "
-            "Có thể truyền expect_text + force_pron để UI hiển thị yêu cầu đọc và chấm phát âm."
         ),
         request=MessageRequestSerializer,
         responses={200: MessageResponseSerializer},
-        parameters=[
-            OpenApiParameter(
-                name="return_turns",
-                type=OpenApiTypes.INT,
-                location=OpenApiParameter.QUERY,
-                required=False,
-                description="Số lượt hội thoại gần nhất cần trả về cùng response."
-            ),
+        examples=[
+            OpenApiExample(
+                "Ask with RAG + force_pron",
+                value={
+                    "conv_id": "7f7f2e35-2a8c-4f0a-8121-5f8b4d2a6f12",
+                    "user_text": "How to greet politely?",
+                    "skill": "Hello & Goodbye",
+                    "force_pron": "true",
+                    "expect_text": "Good morning! Nice to meet you."
+                },
+                request_only=True,
+            )
         ],
     )
     @action(detail=False, methods=['post'])
@@ -145,27 +168,43 @@ class ChatViewSet(viewsets.ViewSet):
         system_turn = Turn.objects.filter(conversation=conv, role='system').first()
         system_prompt = system_turn.content if system_turn else ""
 
-        # limit history nếu có query param
+        # history
         try:
             last_n = int(request.query_params.get('return_turns') or 0)
         except ValueError:
             last_n = 0
         history = _turns_to_history(conv, last_n=last_n)
 
-        # --- RAG: chỉ chèn khi có hit ---
+        # ---- RAG
         rag_hits = []
         ctx = ""
         if bool(getattr(conv, "use_rag", False)):
             try:
-                rag = Retriever.ensure()
-                rag_hits = rag.search(
+                idx = get_index()
+                k = int(getattr(conv, "knowledge_limit", 3) or 3)
+                lang_abbr = getattr(conv.topic.language, "abbreviation", None)
+                topic_slug = getattr(conv.topic, "slug", None)
+
+                # Ưu tiên skill_id, fallback skill (title)
+                skill_ids = None
+                if isinstance(v.get("skill_id"), int):
+                    skill_ids = [v["skill_id"]]
+                elif isinstance(v.get("skill"), str) and v["skill"].strip():
+                    qs = Skill.objects.filter(title__iexact=v["skill"].strip())
+                    if lang_abbr:
+                        qs = qs.filter(language_code=lang_abbr)
+                    skill_ids = list(qs.values_list("id", flat=True))[:1] or None
+
+                rag_hits = idx.search(
                     query=(user_text or "").strip() or getattr(conv.topic, "title", ""),
-                    topic=getattr(conv.topic, "slug", None),
-                    skill=(request.data.get("skill") or None),
-                    k=int(getattr(conv, "knowledge_limit", 3) or 3),
-                )
-                ctx = format_rag_snippet(rag_hits) if rag_hits else ""
-                if ctx:
+                    top_k=k,
+                    language=lang_abbr,
+                    topics=[topic_slug] if topic_slug else None,
+                    skills=skill_ids,
+                ) or []
+
+                if rag_hits:
+                    ctx = _format_rag_snippet(rag_hits, max_items=k)
                     system_prompt = (system_prompt or "") + (
                         "\n\n[REFERENCE MATERIALS]\n" + ctx +
                         "\n(Hãy ưu tiên dựa trên tài liệu trên khi phản hồi.)"
@@ -173,15 +212,13 @@ class ChatViewSet(viewsets.ViewSet):
             except Exception:
                 pass
 
-        # --- Gọi LLM (non-stream) ---
+        # ---- LLM
         try:
             llm_res = asyncio.run(call_llm(
                 system_prompt, history, user_text or "",
                 options={
                     "temperature": float(getattr(conv, "temperature", 0.4) or 0.4),
-                    # đúng mapping: số token sinh ra → num_predict
                     "num_predict": int(getattr(conv, "max_tokens", 300) or 300),
-                    # context window để model "đọc" prompt + context
                     "num_ctx": 1536,
                 }
             ))
@@ -194,18 +231,27 @@ class ChatViewSet(viewsets.ViewSet):
             reply_text, suggestions = simple_reply(conv.topic.title, user_text)
             reply_text += f"\n\n(Lưu ý: fallback LLM: {e})"
 
+        # ---- Pron meta: ưu tiên expect_text client cung cấp khi force_pron=True
+        expect_for_pron = (v.get("expect_text") or "").strip()
+        if v.get("force_pron", False):
+            # nếu client không đưa expect_text thì dùng reply_text
+            expect_for_pron = expect_for_pron or reply_text
+
         assistant_meta = {
             "suggestions": suggestions,
             "confidence": 0.7,
             "rag": {
                 "used": bool(rag_hits),
                 "hits": [
-                    {"score": float(s), "meta": m, "doc": d}
-                    for (s, m, d) in (rag_hits[: int(getattr(conv, "knowledge_limit", 3) or 3)] if rag_hits else [])
+                    {"score": float(h.get("score", 0.0)), "meta": h.get("meta"), "doc": h.get("text")}
+                    for h in rag_hits[: int(getattr(conv, "knowledge_limit", 3) or 3)]
                 ],
             },
             "pron": {
-                "expect_text": reply_text,
+                # nếu force_pron thì expect_text sẽ là văn bản yêu cầu user đọc;
+                # nếu không, vẫn để reply_text như trước cho UI tự quyết.
+                "expect_text": expect_for_pron or reply_text,
+                "force": bool(v.get("force_pron", False)),
                 "score_endpoint": "/api/speech/pron/score/",
                 "tts_endpoint": "/api/speech/tts/",
             },
@@ -223,8 +269,7 @@ class ChatViewSet(viewsets.ViewSet):
                 for t in recent_turns
             ]
 
-        resp = {"reply": reply_text, "meta": assistant_meta, "conversation": conv_ser}
-        return Response(resp, status=status.HTTP_200_OK)
+        return Response({"reply": reply_text, "meta": assistant_meta, "conversation": conv_ser}, status=200)
 
     @extend_schema(
         tags=["Chat"],
@@ -241,11 +286,6 @@ class ChatViewSet(viewsets.ViewSet):
     )
     @action(detail=False, methods=["post"])
     def stream(self, request):
-        """
-        POST /api/chat/chat/stream/
-        Body: { conv_id, user_text[, skill] }
-        Trả NDJSON: (rag)?, start, delta*, meta, done.
-        """
         s = MessageRequestSerializer(data=request.data)
         s.is_valid(raise_exception=True)
         conv_id = s.validated_data["conv_id"]
@@ -259,43 +299,60 @@ class ChatViewSet(viewsets.ViewSet):
         system_turn = Turn.objects.filter(conversation=conv, role="system").order_by("created_at").first()
         system_prompt = system_turn.content if system_turn else ""
 
-        # limit history để giảm độ trễ (mặc định 6)
         try:
             last_n = int(request.query_params.get('return_turns') or 6)
         except ValueError:
             last_n = 6
         history = _turns_to_history(conv, last_n=last_n)
 
-        # --- RAG: tính trước để client render nguồn sớm ---
+        # ---- RAG (bản mới) chuẩn bị trước để stream ra sớm
         rag_hits = []
         ctx = ""
         if bool(getattr(conv, "use_rag", False)):
             try:
-                rag = Retriever.ensure()
-                rag_hits = rag.search(
+                idx = get_index()
+                k = int(getattr(conv, "knowledge_limit", 3) or 3)
+                lang_abbr = getattr(conv.topic.language, "abbreviation", None)
+                topic_slug = getattr(conv.topic, "slug", None)
+
+                skill_ids: List[int] | None = None
+                skill_id = request.data.get("skill_id")
+                if isinstance(skill_id, int):
+                    skill_ids = [skill_id]
+                else:
+                    skill_title = request.data.get("skill")
+                    if isinstance(skill_title, str) and skill_title.strip():
+                        qs_skill = Skill.objects.filter(title__iexact=skill_title.strip())
+                        if lang_abbr:
+                            qs_skill = qs_skill.filter(language_code=lang_abbr)
+                        skill_ids = list(qs_skill.values_list("id", flat=True))[:1] or None
+
+                res = idx.search(
                     query=(user_text or "").strip() or getattr(conv.topic, "title", ""),
-                    topic=getattr(conv.topic, "slug", None),
-                    skill=(request.data.get("skill") or None),
-                    k=int(getattr(conv, "knowledge_limit", 3) or 3),
+                    top_k=k,
+                    language=lang_abbr,
+                    topics=[topic_slug] if topic_slug else None,
+                    skills=skill_ids,
                 )
-                ctx = format_rag_snippet(rag_hits) if rag_hits else ""
+                rag_hits = res or []
+                if rag_hits:
+                    ctx = _format_rag_snippet(rag_hits, max_items=k)
             except Exception:
                 pass
 
         final_system_prompt = (system_prompt + "\n\n[REFERENCE MATERIALS]\n" + ctx) if ctx else system_prompt
 
         def gen():
-            # 1) Gửi RAG hits ngay đầu stream (nếu có)
+            # 1) đẩy RAG hits sớm để client render nguồn
             if rag_hits:
                 yield (json.dumps({
                     "type": "rag",
                     "hits": [
-                        {"score": float(s), "meta": m, "doc": d}
-                        for (s, m, d) in rag_hits[: int(getattr(conv, "knowledge_limit", 3) or 3)]
+                        {"score": float(h.get("score", 0.0)), "meta": h.get("meta"), "doc": h.get("text")}
+                        for h in rag_hits[: int(getattr(conv, "knowledge_limit", 3) or 3)]
                     ]
                 }, ensure_ascii=False) + "\n").encode("utf-8")
 
-            # 2) Stream token từ LLM + thu thập để lưu Turn
             reply_parts: List[str] = []
             captured_meta: Dict[str, Any] | None = None
 
@@ -303,12 +360,12 @@ class ChatViewSet(viewsets.ViewSet):
                 final_system_prompt, history, user_text,
                 options={
                     "temperature": float(getattr(conv, "temperature", 0.4) or 0.4),
-                    "num_ctx": 1536,  # context window
-                    "num_predict": int(getattr(conv, "max_tokens", 300) or 300),  # số token sinh
+                    "num_ctx": 1536,
+                    "num_predict": int(getattr(conv, "max_tokens", 300) or 300),
                     "keep_alive": "15m",
                 },
             ):
-                # bắt NDJSON để tích lũy
+                # Thu NDJSON để lưu turn
                 try:
                     sline = chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
                     line = sline.strip()
@@ -321,10 +378,8 @@ class ChatViewSet(viewsets.ViewSet):
                 except Exception:
                     pass
 
-                # forward chunk ra client
                 yield chunk
 
-            # 3) Sau khi stream xong → lưu Turn assistant
             reply_text = "".join(reply_parts).strip()
             meta_payload = captured_meta or {"suggestions": ["Bạn muốn đi sâu phần nào tiếp?"], "confidence": 0.7}
             assistant_meta = {
@@ -332,8 +387,8 @@ class ChatViewSet(viewsets.ViewSet):
                 "rag": {
                     "used": bool(rag_hits),
                     "hits": [
-                        {"score": float(s), "meta": m, "doc": d}
-                        for (s, m, d) in (rag_hits[: int(getattr(conv, "knowledge_limit", 3) or 3)] if rag_hits else [])
+                        {"score": float(h.get("score", 0.0)), "meta": h.get("meta"), "doc": h.get("text")}
+                        for h in rag_hits[: int(getattr(conv, "knowledge_limit", 3) or 3)]
                     ],
                 },
                 "pron": {
@@ -350,23 +405,25 @@ class ChatViewSet(viewsets.ViewSet):
         resp["X-Accel-Buffering"] = "no"
         return resp
 
-    @action(detail=False, methods=['post'])
+    @extend_schema(
+        tags=["Chat"],
+        summary="(Admin) Rebuild RAG index",
+        description="Thu hoạch → embed → lưu index; có thể lọc theo topics/langs.",
+        request=OpenApiTypes.OBJECT,
+        responses={201: OpenApiTypes.OBJECT},
+    )
+    @action(detail=False, methods=['post'], permission_classes=[IsAdminUser], url_path='reindex')
     def reindex(self, request):
-        from django.contrib.admin.views.decorators import staff_member_required
-        from django.utils.decorators import method_decorator
-        @method_decorator(staff_member_required)
-        def _do(_req):
-            from .rag.indexer import harvest_docs
-            from .rag.embedders import make_embedder
-            from django.conf import settings
-            import json, numpy as np
-            from pathlib import Path
-            docs, metas = harvest_docs(None)
-            X = make_embedder().encode(docs)
-            out = Path(settings.RAG_INDEX_DIR); out.mkdir(parents=True, exist_ok=True)
-            (out / "docs.json").write_text(json.dumps(docs, ensure_ascii=False), encoding="utf-8")
-            (out / "metas.json").write_text(json.dumps(metas, ensure_ascii=False), encoding="utf-8")
-            np.save(out / "embeddings.npy", X.astype("float32"))
-            return Response({"ok": True, "count": len(docs)})
-        return _do(request)
-    
+        """
+        Body (tuỳ chọn):
+        {
+          "topics": ["a1-greetings", "basics-1"],
+          "langs":  ["en", "vi"]
+        }
+        """
+        from .rag import indexer
+        body = request.data or {}
+        topics = body.get("topics")
+        langs = body.get("langs")
+        res = indexer.build_index(topic_slugs=topics, langs=langs)
+        return Response(res, status=status.HTTP_201_CREATED)

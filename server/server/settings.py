@@ -85,6 +85,7 @@ INSTALLED_APPS = [
     'speech',
     "recommend",
     "corsheaders",
+    "pgvector.django",
 ]
 
 MIDDLEWARE = [

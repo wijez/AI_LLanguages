@@ -1,6 +1,9 @@
 from django.utils import timezone
 from django.db import models
 from users.models import User
+import uuid
+from django.utils.text import slugify
+from pgvector.django import VectorField
 
 class Language(models.Model):
     name = models.CharField(max_length=100)
@@ -37,6 +40,10 @@ class Topic(models.Model):
     order = models.IntegerField(default=0)
     golden = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding_text = models.TextField(blank=True)
+    embedding_updated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -52,6 +59,7 @@ class Topic(models.Model):
 class TopicProgress(models.Model):
     enrollment = models.ForeignKey(LanguageEnrollment, on_delete=models.CASCADE, related_name='topic_progress')
     topic = models.ForeignKey(Topic, on_delete=models.CASCADE)
+    highest_completed_order = models.IntegerField(default=0)
     completed = models.BooleanField(default=False)
     xp = models.IntegerField(default=0)
     last_seen = models.DateTimeField(null=True, blank=True)
@@ -76,7 +84,6 @@ class Skill(models.Model):
         QUIZ      = "quiz",      "Generic MCQ/QA"
         PRON      = "pron",      "Pronunciation"
 
-    # Skill dùng chung nhiều lesson (B2)
     title = models.CharField(max_length=255)
     slug = models.SlugField(max_length=150, blank=True)
     description = models.TextField(blank=True)
@@ -262,3 +269,119 @@ class UserSkillStats(models.Model):
 #             models.UniqueConstraint(fields=['enrollment', 'skill'], name='uq_userskillstats_enrollment_skill')
 #         ]
 #         indexes = [models.Index(fields=['enrollment', 'skill'])]
+
+
+
+class RoleplayScenario(models.Model):
+    class Level(models.TextChoices):
+        A1 = "A1", "CEFR A1"
+        A2 = "A2", "CEFR A2"
+        B1 = "B1", "CEFR B1"
+        B2 = "B2", "CEFR B2"
+        C1 = "C1", "CEFR C1"
+        C2 = "C2", "CEFR C2"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name="roleplay_scenarios")
+    slug = models.SlugField(max_length=150)
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    level = models.CharField(max_length=2, choices=Level.choices, default=Level.A1)
+    order = models.IntegerField(default=0)
+    # gắn kịch bản với các skill (để lọc RAG theo skill)
+    skills = models.ManyToManyField(Skill, related_name="roleplay_scenarios", through="ScenarioSkill", blank=True)
+
+    tags = models.JSONField(default=list, blank=True)   # ["greetings","introduce-yourself"]
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding_text = models.TextField(blank=True)
+    embedding_updated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["topic", "slug"], name="uq_roleplay_topic_slug")
+        ]
+        ordering = ["topic_id", "order", "created_at"]
+        indexes = [
+            models.Index(fields=["topic", "order"]),
+            models.Index(fields=["level"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.slug:
+            self.slug = slugify(self.slug)
+        else:
+            self.slug = slugify(self.title)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.title} ({self.topic.slug})"
+
+
+class ScenarioSkill(models.Model):
+    scenario = models.ForeignKey(RoleplayScenario, on_delete=models.CASCADE)
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE)
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        unique_together = ("scenario", "skill")
+        ordering = ["order", "id"]
+        indexes = [
+            models.Index(fields=["scenario", "order"]),
+            models.Index(fields=["skill", "order"]),
+        ]
+
+    def __str__(self):
+        return f"{self.scenario} ↔ {self.skill} (#{self.order})"
+
+
+class RoleplayBlock(models.Model):
+    class Section(models.TextChoices):
+        BACKGROUND   = "background",   "Background"
+        WARMUP       = "warmup",       "Warm-up Question"
+        INSTRUCTION  = "instruction",  "Instruction"
+        DIALOGUE     = "dialogue",     "Dialogue Turn"
+        VOCABULARY   = "vocabulary",   "Vocabulary Item"
+
+    class Role(models.TextChoices):
+        TEACHER   = "teacher",   "Teacher"
+        STUDENT_A = "student_a", "Student A"
+        STUDENT_B = "student_b", "Student B"
+        NARRATOR  = "narrator",  "Narrator"  
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    scenario = models.ForeignKey(RoleplayScenario, on_delete=models.CASCADE, related_name="blocks")
+    section = models.CharField(max_length=32, choices=Section.choices)
+    order = models.IntegerField(default=0)
+
+    role = models.CharField(max_length=32, choices=Role.choices, blank=True)
+    text = models.TextField()
+
+    extra = models.JSONField(default=dict, blank=True)  
+    audio_key = models.CharField(max_length=255, blank=True) 
+    tts_voice = models.CharField(max_length=64, blank=True)    
+    lang_hint = models.CharField(max_length=10, blank=True)    
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding_text = models.TextField(blank=True)
+    embedding_updated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["scenario_id", "section", "order", "created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["scenario", "section", "order"], name="uq_block_scenario_section_order")
+        ]
+        indexes = [
+            models.Index(fields=["scenario", "section", "order"]),
+            models.Index(fields=["section"]),
+            models.Index(fields=["role"]),
+        ]
+
+    def __str__(self):
+        return f"{self.scenario.slug} · {self.section} · #{self.order} · {self.role or '-'}"

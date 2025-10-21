@@ -154,6 +154,6 @@ class ResendVerifyCodeView(APIView):
 
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
-
+    @extend_schema(responses=UserMeSerializer)
     def get(self, request):
         return Response(UserMeSerializer(request.user, context={"request": request}).data)

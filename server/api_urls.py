@@ -16,7 +16,7 @@ router.register(r'switchaccount', AccountSwitchViewset)
 
 # Language
 router.register(r'languages', LanguageViewSet)
-router.register(r'enrollments', LanguageEnrollmentViewSet)
+router.register(r'enrollments', LanguageEnrollmentViewSet, basename='language-enrollment')
 router.register(r'lessons', LessonViewSet)
 router.register(r'topics', TopicViewSet, basename='topic')
 router.register(r'skills', SkillViewSet, basename='skill')
@@ -44,6 +44,5 @@ router.register(r'leaderboard-entries', LeaderboardEntryViewSet, basename='leade
 
 
 urlpatterns = router.urls + [
-    path('me/',  MeView.as_view(), name="read-me"),
     path("export/chat_training.jsonl", export_chat_training, name="export_chat_training"),
 ]

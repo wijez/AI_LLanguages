@@ -6,6 +6,8 @@ from languages.models import (
 )
 from django.db.models import Q
 from django.utils.text import slugify
+from django.db import transaction, IntegrityError
+from rest_framework import serializers
 
 
 class LanguageListSerializer(serializers.ListSerializer):
@@ -27,11 +29,12 @@ class LanguageListSerializer(serializers.ListSerializer):
 
 
 class LanguageSerializer(serializers.ModelSerializer):
+    code = serializers.CharField(source="abbreviation", read_only=True)
+
     class Meta:
         model = Language
-        fields = '__all__'
-        list_serializer_class = LanguageListSerializer
-    
+        fields = "__all__" 
+
     def validate_direction(self, v):
         v = (v or "").upper()
         if v not in ("LTR", "RTL"):
@@ -40,9 +43,65 @@ class LanguageSerializer(serializers.ModelSerializer):
 
 
 class LanguageEnrollmentSerializer(serializers.ModelSerializer):
+    abbreviation  = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    language_code = serializers.CharField(write_only=True, required=False)
+    language_id = serializers.IntegerField(write_only=True, required=False)
+
+    language = LanguageSerializer(read_only=True)
+
     class Meta:
         model = LanguageEnrollment
-        fields = '__all__'
+        fields = "__all__"
+        read_only_fields = ["total_xp", "streak_days", "last_practiced", "created_at", "user"]
+        extra_kwargs = {
+            "user": {"read_only": True},  
+        }
+
+    def validate(self, attrs):
+        abbr = attrs.pop("abbreviation", None) or attrs.pop("language_code", None)
+        lng_id = attrs.pop("language_id", None)
+
+        if not abbr and not lng_id:
+            raise serializers.ValidationError("Provide either language_code or language_id.")
+        if abbr and lng_id:
+            raise serializers.ValidationError("Provide only one of language_code or language_id.")
+
+        if abbr:
+            lang = Language.objects.filter(abbreviation__iexact=abbr).first()
+        else:
+            lang = Language.objects.filter(id=lng_id).first()
+
+        if not lang:
+            raise serializers.ValidationError("Language not found.")
+
+        attrs["language"] = lang
+        return attrs
+
+    def create(self, validated_data):
+        """
+        Idempotent create: nếu (user, language) đã tồn tại → trả bản ghi cũ.
+        """
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError("Authentication required.")
+
+        language = validated_data["language"]
+        level = validated_data.get("level", 0)
+
+        try:
+            with transaction.atomic():
+                obj, created = LanguageEnrollment.objects.get_or_create(
+                    user=user,
+                    language=language,
+                    defaults={"level": level},
+                )
+        except IntegrityError:
+            obj = LanguageEnrollment.objects.get(user=user, language=language)
+            created = False
+
+        self.context["__created__"] = created
+        return obj
 
 
 # ---- SỬA LẠI CHO B2: Lesson không còn FK skill; có FK topic + M2M skills ----
@@ -137,16 +196,19 @@ class TopicProgressSerializer(serializers.ModelSerializer):
     topic_info = serializers.SerializerMethodField(read_only=True)
     language = serializers.CharField(source="enrollment.language.abbreviation", read_only=True)
     user_id = serializers.IntegerField(source="enrollment.user.id", read_only=True)
-
+    unlock_order = serializers.SerializerMethodField(read_only=True)
     class Meta:
         model = TopicProgress
-        fields = ["id", "enrollment", "topic", "xp", "completed", "reviewable",
-                  "topic_info", "language", "user_id"]
-        read_only_fields = ["id", "topic_info", "language", "user_id"]
+        fields = ["id", "enrollment", "topic",'highest_completed_order', "xp", "completed", "reviewable",
+                  "topic_info", "language",   "unlock_order",   "user_id"]
+        read_only_fields = ["id", "topic_info", "language", "user_id",  "unlock_order" ]
 
     def get_topic_info(self, obj):
         t = obj.topic
         return {"id": t.id, "slug": t.slug, "title": t.title}
+    
+    def get_unlock_order(self, obj):
+        return (obj.highest_completed_order or 0) + 1
         
 
 # ---- SỬA LẠI CHO B2: Skill không còn topic/order; thêm các field bài tập ----

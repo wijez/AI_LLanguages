@@ -2,7 +2,7 @@
 services:
   # BE Database
   postgres_be:
-    image: postgres:16
+    image: pgvector/pgvector:pg16 
     container_name: postgres_be
     restart: always
     environment:
@@ -18,7 +18,7 @@ services:
 
   # AI Database
   postgres_ai:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     container_name: postgres_ai
     restart: always
     environment:

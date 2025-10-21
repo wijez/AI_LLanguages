@@ -33,11 +33,29 @@ class StartRequestSerializer(serializers.Serializer):
     language_override = serializers.CharField(required=False, default='vi')
     conv_name = serializers.CharField(required=False, allow_blank=True)
 
+# serializers.py
+
 class MessageRequestSerializer(serializers.Serializer):
     conv_id = serializers.UUIDField()
-    user_text = serializers.CharField(allow_blank=True, allow_null=True, required=False, default='')
-    expect_text = serializers.CharField(required=False, allow_blank=True, default='')
+
+    # có thể rỗng / null -> chuẩn hoá về "" trong validate()
+    user_text = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+
+    # lọc RAG: ưu tiên skill_id, fallback skill (title)
+    skill_id = serializers.IntegerField(required=False, allow_null=True)
+    skill    = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+    # UI chấm phát âm
+    expect_text = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     force_pron  = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        # Chuẩn hoá None -> "" cho string fields
+        for k in ("user_text", "skill", "expect_text"):
+            if attrs.get(k) is None:
+                attrs[k] = ""
+        return attrs
+
     
 # --- Responses
 class StartResponseSerializer(serializers.Serializer):

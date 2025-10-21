@@ -35,14 +35,53 @@ class LanguageViewSet(viewsets.ModelViewSet):
 
 
 class LanguageEnrollmentViewSet(viewsets.ModelViewSet):
-    queryset = LanguageEnrollment.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
     serializer_class = LanguageEnrollmentSerializer
+    lookup_field = "pk"
+    queryset = LanguageEnrollment.objects.select_related("language").all()
+    def get_queryset(self):
+        qs = (LanguageEnrollment.objects
+                .select_related("language")
+                .filter(user=self.request.user)
+                .order_by("-created_at"))
+        
+        abbr = (
+            self.request.query_params.get("abbreviation")
+            or self.request.query_params.get("language_abbr")
+            or self.request.query_params.get("language_code")
+            or self.request.query_params.get("code")
+        )
+        if abbr: 
+            qs = qs.filter(language__abbreviation_iexact=abbr)
+        
+        lang_id = (
+            self.request.query_params.get("language_id")
+            or self.request.query_params.get("language")
+        )
+        if lang_id:
+            qs = qs.filter(language_id=lang_id)
+        return qs.order_by("-created_at")
+    
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        obj = serializer.save()
+        data = self.get_serializer(obj).data
+        created = bool(serializer.context.get("__created__"))
+        return Response({"created": created, "enrollment": data},
+                        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="me")
+    def me(self, request):
+        qs = self.get_queryset()
+        return Response(self.get_serializer(qs, many=True).data)
 
 
 # ---- SỬA LẠI CHO B2: Lesson select_related("topic"), filter theo through ----
 class LessonViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminOrSuperAdmin]
-    queryset = Lesson.objects.select_related("topic").order_by("order", "id")
+    queryset = Lesson.objects.select_related("topic", "topic__language").all()
     serializer_class = LessonSerializer
 
     def get_queryset(self):
@@ -62,6 +101,83 @@ class LessonViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(topic__slug=t)
         return qs
 
+    @action(detail=True, methods=["post"], url_path="add-skill", permission_classes=[permissions.IsAuthenticated])
+    def add_skill(self, request, pk=None):
+        """
+        Tạo 1 skill mới (không chặn trùng type) và gắn vào lesson theo order.
+        Body:
+        {
+          "type": "listening" | "speaking" | "reading" | "writing" |
+                  "matching" | "fillgap"  | "ordering" | "quiz" | "pron",
+          "title": "...",                # optional
+          "description": "...",          # optional
+          "content": {...},              # optional (nếu thiếu sẽ tạo khung mặc định theo type)
+          "xp_reward": 10,               # optional (mặc định 10)
+          "duration_seconds": 90,        # optional (mặc định 90)
+          "difficulty": 1,               # optional (mặc định 1)
+          "order": 3                     # optional; nếu thiếu tự lấy next order
+        }
+        """
+        lesson = self.get_object()
+        data = request.data or {}
+
+        ty = str(data.get("type") or "quiz").lower()
+        title = data.get("title") or f"{lesson.title} · {ty.capitalize()}"
+        description = data.get("description") or ""
+        xp_reward = int(data.get("xp_reward") or 10)
+        duration_seconds = int(data.get("duration_seconds") or 90)
+        difficulty = int(data.get("difficulty") or 1)
+
+        # Nếu không gửi order → set next order
+        order = data.get("order")
+        if order is None:
+            max_order = LessonSkill.objects.filter(lesson=lesson).aggregate(m=Max("order"))["m"] or 0
+            order = max_order + 1
+
+        def default_content(t):
+            base = {"type": t}
+            if t in ("listening", "speaking", "pron"):
+                base.update({"audio": [], "prompts": []})
+            elif t in ("reading", "writing"):
+                base.update({"passages": [], "questions": []})
+            else:
+                base.update({"items": []})
+            return base
+
+        content = data.get("content") or default_content(ty)
+
+        lang_code = getattr(getattr(lesson.topic, "language", None), "abbreviation", None) or "en"
+
+        # Tạo slug “đủ unique”
+        base_slug = slugify(f"{lesson.topic.slug}-{lesson.id}-{ty}")[:120]
+        slug = base_slug
+        i = 1
+        while Skill.objects.filter(slug=slug).exists():
+            i += 1
+            slug = f"{base_slug}-{i}"[:150]
+
+        with transaction.atomic():
+            skill = Skill.objects.create(
+                title=title,
+                slug=slug,
+                description=description,
+                type=ty,
+                content=content,
+                xp_reward=xp_reward,
+                duration_seconds=duration_seconds,
+                difficulty=difficulty,
+                language_code=lang_code,
+                tags=[],
+                is_active=True,
+            )
+            LessonSkill.objects.create(lesson=lesson, skill=skill, order=int(order))
+
+        # Trả lại danh sách skill theo thứ tự
+        qs = (Skill.objects
+              .filter(lessonskill__lesson_id=lesson.id, is_active=True)
+              .annotate(ls_order=F('lessonskill__order'))
+              .order_by('ls_order', 'id'))
+        return Response(SkillSerializer(qs, many=True).data, status=status.HTTP_201_CREATED)
     # (tuỳ chọn) endpoint lấy skills của 1 lesson theo thứ tự
     @action(detail=True, methods=['get'], url_path='skills')
     def skills(self, request, pk=None):
@@ -77,12 +193,26 @@ class TopicViewSet(viewsets.ModelViewSet):
     queryset = Topic.objects.select_related("language").all()
     serializer_class = TopicSerializer
 
+    def get_permissions(self):
+        if self.request.method in permissions.SAFE_METHODS:  # GET/HEAD/OPTIONS
+            return [permissions.AllowAny()]
+        return [IsAdminOrSuperAdmin()]
+
     def get_queryset(self):
         qs = super().get_queryset()
+        abbr = (
+            self.request.query_params.get("language_abbr")
+            or self.request.query_params.get("abbr")
+            or self.request.query_params.get("language_code")
+            or self.request.query_params.get("code")
+            or self.request.query_params.get("lang")
+        )
+        if abbr:
+            qs = qs.filter(language__abbreviation__iexact=abbr)
         lang = self.request.query_params.get('lang')
         if lang:
             qs = qs.filter(language__abbreviation=lang)
-        return qs
+        return qs.order_by("order", "id")
 
     def get_serializer_class(self):
         # DÙNG serializer khác cho action custom
@@ -150,7 +280,38 @@ class TopicViewSet(viewsets.ModelViewSet):
         # trả response đúng schema
         out = AutoGenerateLessonsOut({"created": created, "topics": topics_count})
         return Response(out.data, status=status.HTTP_201_CREATED)
+    @action(detail=False, methods=['get'], url_path='by-language', permission_classes=[permissions.IsAuthenticated])
+    def by_language(self, request):
+        user = request.user
+        abbr = (
+            request.query_params.get("language_abbr")
+            or request.query_params.get("abbr")
+            or request.query_params.get("language_code")
+            or request.query_params.get("code")
+            or request.query_params.get("lang")
+        )
+        lang_id = request.query_params.get("language_id")
+        # trả những topic mà user đăng kí 
+        qs = Topic.objects.select_related("language").filter(
+            language__enrollments__user=user
+        )
 
+        if abbr:
+            qs = qs.filter(language__abbreviation__iexact=abbr)
+            if not LanguageEnrollment.objects.filter(user=user, language__abbreviation__iexact=abbr).exists():
+                return Response({"detail": "Not enrolled in this language."}, status=403)
+
+        if lang_id:
+            qs = qs.filter(language_id=lang_id)
+            # chặn truy cập nếu chưa enroll lang_id:
+            if not LanguageEnrollment.objects.filter(user=user, language_id=lang_id).exists():
+                return Response({"detail": "Not enrolled in this language."}, status=403)
+
+        qs = qs.order_by("order", "id")
+
+        page = self.paginate_queryset(qs)
+        ser = self.get_serializer(page if page is not None else qs, many=True)
+        return self.get_paginated_response(ser.data) if page is not None else Response(ser.data)
 
 # ---- SỬA LẠI CHO B2: Skill không còn topic/order; filter theo lessons__topic ----
 class SkillViewSet(mixins.ListModelMixin,
@@ -301,8 +462,11 @@ class TopicProgressViewSet(viewsets.ModelViewSet):
         user_id = self.request.query_params.get("user_id")
         enrollment_id = self.request.query_params.get("enrollment_id")
         language = self.request.query_params.get("language")   # abbreviation, vd: en
-        topic = self.request.query_params.get("topic")         # id hoặc slug
+        topic = self.request.query_params.get("topic") 
+        mine  = self.request.query_params.get("mine")       
 
+        if mine:
+            qs = qs.filter(enrollment__user=self.request.user)
         if enrollment_id:
             qs = qs.filter(enrollment_id=enrollment_id)
 
@@ -419,3 +583,51 @@ class TopicProgressViewSet(viewsets.ModelViewSet):
         tp.reviewable = val
         tp.save(update_fields=["reviewable"])
         return Response({"id": tp.id, "reviewable": tp.reviewable})
+    @action(detail=False, methods=["get"], url_path="gate", permission_classes=[IsAuthenticated])
+    def gate(self, request):
+        """
+        Trả về unlock_order cho user hiện tại theo topic (id/slug) + language (abbr, optional).
+        - Nếu chưa có TopicProgress → tự tạo với highest_completed_order=0.
+        """
+        topic_ref = request.query_params.get("topic")
+        lang_abbr = request.query_params.get("language")  # optional, giúp xác định enrollment đúng khi 1 user học nhiều ngôn ngữ
+        if not topic_ref:
+            return Response({"detail": "topic is required (id or slug)."}, status=400)
+
+        # Resolve topic
+        try:
+            if str(topic_ref).isdigit():
+                topic = Topic.objects.select_related("language").get(id=int(topic_ref))
+            else:
+                topic = Topic.objects.select_related("language").get(slug=str(topic_ref))
+        except Topic.DoesNotExist:
+            return Response({"detail": "Topic not found."}, status=404)
+
+        # Resolve enrollment của user theo topic.language (hoặc theo language param nếu có)
+        try:
+            lang = topic.language
+            if lang_abbr and lang_abbr.lower() != lang.abbreviation.lower():
+                # nếu truyền abbr khác → ưu tiên abbr
+                from .models import Language
+                lang = Language.objects.get(abbreviation__iexact=lang_abbr)
+
+            enrollment, _ = LanguageEnrollment.objects.get_or_create(
+                user=request.user, language=lang,
+                defaults={"total_xp": 0, "streak_days": 0}
+            )
+        except Exception:
+            return Response({"detail": "Cannot resolve enrollment."}, status=400)
+
+        # Get/create progress
+        tp, _ = TopicProgress.objects.get_or_create(enrollment=enrollment, topic=topic)
+
+        unlock_order = (tp.highest_completed_order or 0) + 1
+        total_lessons = Lesson.objects.filter(topic=topic).count()
+
+        ser = self.get_serializer(tp)
+        data = ser.data
+        data.update({
+            "unlock_order": unlock_order,    # đảm bảo luôn có
+            "total_lessons": total_lessons,
+        })
+        return Response(data)

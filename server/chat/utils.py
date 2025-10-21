@@ -27,3 +27,16 @@ def simple_reply(topic_title:str, user_text:str|None):
             f"1) Bạn đọc: “Hello!”\n2) Bạn đọc: “Nice to meet you.”\n\n{ask}"
     suggestions = random.sample(SUGGESTION_POOL, k=3)
     return reply, suggestions
+
+
+
+def _format_rag_snippet(hits, max_items=3, max_len=350) -> str:
+    out = []
+    for i, h in enumerate((hits or [])[:max_items], start=1):
+        txt = (h.get("text") or "").strip()
+        if len(txt) > max_len:
+            txt = txt[:max_len].rsplit(" ", 1)[0] + "…"
+        m = h.get("meta") or {}
+        tag = f"{m.get('topic_slug','?')} / L{m.get('lesson_order','?')} / {m.get('skill_title','?')}"
+        out.append(f"[{i}] ({h.get('score',0):.3f}) {tag}: {txt}")
+    return "\n".join(out)
