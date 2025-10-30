@@ -209,6 +209,7 @@ class Mistake(models.Model):
         ("spelling", "Spelling"),
         ('other', 'Other'),
     ]
+    skill = models.ForeignKey(Skill, on_delete=models.SET_NULL, null=True, blank=True, related_name="mistakes")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="mistakes")
     enrollment = models.ForeignKey(LanguageEnrollment, on_delete=models.CASCADE, related_name="mistakes")
     interaction = models.ForeignKey(LearningInteraction, on_delete=models.SET_NULL, null=True, blank=True, related_name="mistakes")
@@ -231,5 +232,6 @@ class Mistake(models.Model):
         indexes = [
             models.Index(fields=['user', 'timestamp']),
             models.Index(fields=['enrollment', 'timestamp']),
-            models.Index(fields=['source'])
+            models.Index(fields=['source']),
+            models.Index(fields=['skill', 'timestamp'])
         ]

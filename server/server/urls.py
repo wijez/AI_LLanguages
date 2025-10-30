@@ -24,7 +24,6 @@ from django.conf.urls.static import static
 urlpatterns = [
     path("api/users/", include("users.urls")),
     path("api/chat/", include("chat.urls")),
-    path("api/pron/", include("pron.urls")),
     path("api/", include('speech.urls')),
     path('admin/', admin.site.urls),
     

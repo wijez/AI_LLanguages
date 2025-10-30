@@ -114,6 +114,7 @@ class MistakeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Mistake
         fields = '__all__'
+        read_only_fields = ["user","enrollment","timestamp"]
 
 
 class WordDetailSerializer(serializers.ModelSerializer):

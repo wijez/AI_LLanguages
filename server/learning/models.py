@@ -109,3 +109,20 @@ class LessonSession(models.Model):
             import uuid
             self.session_id = str(uuid.uuid4())
         super().save(*args, **kwargs)
+
+
+class SessionAnswer(models.Model):
+    session = models.ForeignKey(LessonSession, on_delete=models.CASCADE, related_name="answers")
+    skill = models.ForeignKey(Skill, on_delete=models.SET_NULL, null=True, blank=True)
+    question_id = models.CharField(max_length=64)
+    is_correct = models.BooleanField(default=False)
+    user_answer = models.TextField(blank=True)
+    expected = models.TextField(blank=True)
+    meta = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["session", "created_at"]),
+            models.Index(fields=["skill", "created_at"]),
+        ]

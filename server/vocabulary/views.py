@@ -70,9 +70,10 @@ class LearningInteractionViewSet(viewsets.ModelViewSet):
 
 class MistakeViewSet(viewsets.ModelViewSet):
     permission_classes = [HasInternalApiKey | IsAuthenticated]
-    queryset = Mistake.objects.all()
+    queryset = Mistake.objects.all().order_by('-timestamp')
     serializer_class = MistakeSerializer
-
+    filterset_fields = ['skill','lesson','enrollment','source']
+    ordering_fields = ['timestamp','id']
 
 @api_view(['GET'])
 def export_mistakes(request):

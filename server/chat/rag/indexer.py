@@ -6,9 +6,7 @@ import numpy as np
 from django.conf import settings
 
 # ---- Embedding backend hook ----
-# Kỳ vọng embedders.py có API như sau:
 #   get_embedder() -> object có .embed_texts(list[str]) -> np.ndarray, .embed_query(str) -> np.ndarray
-# Nếu bạn dùng tên khác, sửa 2 dòng import/khởi tạo bên dưới cho khớp.
 try:
     from .embedders import get_embedder  # chỉnh import path cho đúng module của bạn
 except Exception:  # fallback: sẽ raise rõ ràng khi gọi build_index

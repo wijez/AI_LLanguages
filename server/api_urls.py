@@ -5,6 +5,7 @@ from social.views import *
 from languages.views import *
 from progress.views import * 
 from vocabulary.views import * 
+from learning.views import * 
 
 
 router = DefaultRouter()
@@ -23,7 +24,12 @@ router.register(r'skills', SkillViewSet, basename='skill')
 router.register(r'progress', TopicProgressViewSet)
 router.register(r'user-skill-stats', UserSkillStatsViewSet, basename='user-skill-stats')
 router.register(r"skill-stats", SkillStatsViewSet, basename="skill-stats")
+router.register(r'roleplay-scenario',RoleplayScenarioViewSet, basename='roleplay-scenario')
+router.register(r'roleplay-block',  RoleplayBlockViewSet, basename='roleplay-block')
+router.register(r'roleplay-session', RoleplaySessionViewSet, basename='roleplay-session')
 
+#Learning
+router.register(r'learning/sessions', LessonSessionViewSet, basename='learning-session')
 
 # Vocabulary
 router.register(r'audio-assets', AudioAssetViewSet, basename='audioasset')

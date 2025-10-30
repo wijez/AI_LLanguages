@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 from pathlib import Path
 from datetime import timedelta
 import os
+from utils.config_log import LOGGING as DJANGO_LOGGING
+
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:
@@ -28,6 +30,8 @@ if load_dotenv:
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
+
+LOGGING = DJANGO_LOGGING
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
 
@@ -81,7 +85,6 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'rest_framework_simplejwt',
     'chat',
-    'pron',
     'speech',
     "recommend",
     "corsheaders",
@@ -90,6 +93,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'utils.middleware.RequestIDMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -144,7 +148,6 @@ DATABASES = {
         'PASSWORD': 'portgasDace',
         'HOST': '127.0.0.1',   # kết nối ra container
         'PORT': '5543',    
-        "OPTIONS": {"options": "-c search_path=public"},     # cổng map từ docker-compose
     }
 }
 

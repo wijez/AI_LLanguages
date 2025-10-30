@@ -121,7 +121,9 @@ class PronScoreUpAPIView(APIView):
         s = PronScoreAnySerializer(data=request.data)
         s.is_valid(raise_exception=True)
 
-        expected_text = s.validated_data.get("target_text") or s.validated_data.get("expected_text") or ""
+        expected_text = (s.validated_data.get("target_text")
+                         or s.validated_data.get("expected_text")
+                         or "").strip()
         lang = s.validated_data.get("language_code") or s.validated_data.get("lang") or "en"
 
         raw_bytes = None
@@ -129,7 +131,6 @@ class PronScoreUpAPIView(APIView):
         filename = None
         content_type = None
 
-        # Ưu tiên file multipart nếu có
         if "audio" in request.FILES and request.FILES["audio"].size:
             f = request.FILES["audio"]
             filename = getattr(f, "name", None)
@@ -169,6 +170,8 @@ class PronScoreUpAPIView(APIView):
             audio_b64 = f"data:audio/unknown;base64,{base64.b64encode(raw_bytes).decode()}"
             recognized_text, stt_dbg = stt_transcribe_with_debug(audio_b64, lang)
             out = simple_pron_score(audio_b64, expected_text, lang=lang)
+
+            
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
         except subprocess.CalledProcessError as e:

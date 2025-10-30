@@ -27,8 +27,8 @@ class PronScoreAnySerializer(serializers.Serializer):
     audio = serializers.FileField(required=False, help_text="File audio (wav/mp3/webm/ogg)")
 
     # Map theo payload swagger bạn vừa gửi
-    target_text = serializers.CharField(required=False, help_text="= expected_text")
-    expected_text = serializers.CharField(required=False, help_text="Alias của target_text")
+    target_text = serializers.CharField(required=False,allow_blank=True, help_text="= expected_text")
+    expected_text = serializers.CharField(required=False,allow_blank=True, help_text="Alias của target_text")
     language_code = serializers.CharField(required=False, help_text="= lang (vd: en, vi)")
     lang = serializers.CharField(required=False, help_text="Alias của language_code")
 

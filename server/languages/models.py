@@ -41,9 +41,12 @@ class Topic(models.Model):
     golden = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     
-    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding = VectorField(dimensions=768, null=True, blank=True)
     embedding_text = models.TextField(blank=True)
     embedding_updated_at = models.DateTimeField(null=True, blank=True)
+    embedding_hash = models.CharField(max_length=64, blank=True, default="")
+    embedding_model = models.CharField(max_length=100, blank=True, default="")
+
 
     class Meta:
         constraints = [
@@ -85,16 +88,13 @@ class Skill(models.Model):
         PRON      = "pron",      "Pronunciation"
 
     title = models.CharField(max_length=255)
-    slug = models.SlugField(max_length=150, blank=True)
-    description = models.TextField(blank=True)
-
-    # Thuộc tính quan trọng cho “bài tập”
     type = models.CharField(max_length=32, choices=SkillType.choices,  default=SkillType.QUIZ)
-    content = models.JSONField(null=True, blank=True)  # chứa cấu trúc exercises
     xp_reward = models.IntegerField(default=10)
     duration_seconds = models.IntegerField(default=90)
-    difficulty = models.PositiveSmallIntegerField(default=1)  # 1..5
-    language_code = models.CharField(max_length=10, default="en")  # en/vi/…
+    difficulty = models.PositiveSmallIntegerField(default=1)  
+    title_i18n = models.JSONField(default=dict, blank=True)         
+    description_i18n = models.JSONField(default=dict, blank=True)
+    language_code = models.CharField(max_length=10, default="en")   
 
     # Metadata
     tags = models.JSONField(default=list, blank=True)  # ["A1","greetings"]
@@ -106,7 +106,102 @@ class Skill(models.Model):
 
     def __str__(self):
         return f"{self.title} [{self.type}]"
+    
+    def get_title(self, locale: str):
+        return (self.title_i18n or {}).get(locale) or self.title
 
+class SkillQuestion(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="quiz_questions")
+    question_text = models.TextField() 
+    question_text_i18n = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"QuizQuestion({self.id}) for Skill({self.skill_id})"
+
+
+class SkillChoice(models.Model):
+    question = models.ForeignKey(SkillQuestion, on_delete=models.CASCADE, related_name="choices")
+    text = models.CharField(max_length=255)         # nội dung phương án lựa chọn
+    is_correct = models.BooleanField(default=False) # đánh dấu đâu là đáp án đúng
+
+    def __str__(self):
+        return f"Choice({self.text[:20]}) for Question({self.question_id})"
+
+# --- Model cho loại Fill in the Gap (Điền vào chỗ trống) ---
+class SkillGap(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="fillgaps")
+    text = models.TextField()    # câu văn với chỗ trống, có thể dùng ký hiệu đặc biệt để đánh dấu vị trí chỗ trống
+    answer = models.CharField(max_length=255)  # đáp án đúng điền vào chỗ trống
+
+    def __str__(self):
+        return f"FillGap({self.id}) for Skill({self.skill_id})"
+
+class OrderingItem(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="ordering_items")
+    text = models.CharField(max_length=255)   # nội dung của 1 mảnh (từ/cụm từ) cần sắp xếp
+    order_index = models.IntegerField()       # vị trí đúng trong thứ tự (bắt đầu từ 1 hoặc 0 tùy ý quy ước)
+
+    def __str__(self):
+        return f"OrderingItem({self.text}) order={self.order_index} for Skill({self.skill_id})"
+
+class MatchingPair(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="matching_pairs")
+    left_text = models.CharField(max_length=255)   # nội dung bên trái của cặp
+    right_text = models.CharField(max_length=255)  
+    left_text_i18n = models.JSONField(default=dict, blank=True) # nội dung bên phải tương ứng (đáp án đúng của left_text)
+
+    def __str__(self):
+        return f"MatchingPair({self.left_text} - {self.right_text}) for Skill({self.skill_id})"
+
+class ListeningPrompt(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="listening_prompts")
+    audio_url = models.URLField(blank=True, null=True)   
+    # audio_file = models.FileField(..., blank=True, null=True)
+    question_text = models.CharField(max_length=255, blank=True)
+    answer = models.CharField(max_length=255)      
+
+
+    def __str__(self):
+        return f"ListeningPrompt({self.id}) for Skill({self.skill_id})"
+
+# --- Model cho loại Pronunciation (Phát âm) ---
+class PronunciationPrompt(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="pronunciation_prompts")
+    word = models.CharField(max_length=100)        # từ hoặc cụm từ cần phát âm
+    phonemes = models.CharField(max_length=100, blank=True)  # phiên âm hoặc chú thích phát âm (nếu có)
+    answer = models.CharField(max_length=100, blank=True)   
+
+    def __str__(self):
+        return f"PronunciationPrompt({self.word}) for Skill({self.skill_id})"
+
+class ReadingContent(models.Model):
+    skill = models.OneToOneField(Skill, on_delete=models.CASCADE, related_name="reading_content")
+    passage = models.TextField()   # đoạn văn hoặc nội dung cần đọc
+
+    def __str__(self):
+        return f"ReadingContent for Skill({self.skill_id})"
+
+class ReadingQuestion(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="reading_questions")
+    question_text = models.TextField() 
+    answer = models.CharField(max_length=255)      
+  
+
+    def __str__(self):
+        return f"ReadingQuestion({self.id}) for Skill({self.skill_id})"
+
+class WritingQuestion(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="writing_questions")
+    prompt = models.TextField()   # đề bài hoặc câu hỏi yêu cầu viết
+    answer = models.CharField(max_length=255)  
+    def __str__(self):
+        return f"WritingQuestion({self.id}) for Skill({self.skill_id})"
+
+class SpeakingPrompt(models.Model):
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="speaking_prompts")
+    text = models.CharField(max_length=255)     # hiển thị cho học viên
+    target = models.CharField(max_length=255)   # câu cần nói đúng
+    tip = models.CharField(max_length=255, blank=True)
 
 class Lesson(models.Model):
     topic = models.ForeignKey("Topic", on_delete=models.CASCADE, related_name="lessons")
@@ -258,20 +353,6 @@ class UserSkillStats(models.Model):
             self.save()
 
 
-# class SuggestedLesson(models.Model):
-#     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='suggested_lessons')
-#     lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE)
-#     priority_score = models.FloatField(default=0.0)
-#     recommended_at = models.DateTimeField(auto_now_add=True)
-
-#     class Meta:
-#         constraints = [
-#             models.UniqueConstraint(fields=['enrollment', 'skill'], name='uq_userskillstats_enrollment_skill')
-#         ]
-#         indexes = [models.Index(fields=['enrollment', 'skill'])]
-
-
-
 class RoleplayScenario(models.Model):
     class Level(models.TextChoices):
         A1 = "A1", "CEFR A1"
@@ -282,32 +363,31 @@ class RoleplayScenario(models.Model):
         C2 = "C2", "CEFR C2"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name="roleplay_scenarios")
-    slug = models.SlugField(max_length=150)
+    slug = models.SlugField(max_length=150, unique=True) 
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
     level = models.CharField(max_length=2, choices=Level.choices, default=Level.A1)
     order = models.IntegerField(default=0)
     # gắn kịch bản với các skill (để lọc RAG theo skill)
-    skills = models.ManyToManyField(Skill, related_name="roleplay_scenarios", through="ScenarioSkill", blank=True)
 
-    tags = models.JSONField(default=list, blank=True)   # ["greetings","introduce-yourself"]
+    tags = models.JSONField(default=list, blank=True)
+    skill_tags = models.JSONField(default=list, blank=True)   
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding = VectorField(dimensions=768, null=True, blank=True)
     embedding_text = models.TextField(blank=True)
     embedding_updated_at = models.DateTimeField(null=True, blank=True)
+    embedding_hash = models.CharField(max_length=64, blank=True, default="")
+    embedding_model = models.CharField(max_length=100, blank=True, default="")
+
 
     class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["topic", "slug"], name="uq_roleplay_topic_slug")
-        ]
-        ordering = ["topic_id", "order", "created_at"]
+        ordering = ["order", "created_at"]
         indexes = [
-            models.Index(fields=["topic", "order"]),
+            models.Index(fields=["order"]),
             models.Index(fields=["level"]),
         ]
 
@@ -319,24 +399,7 @@ class RoleplayScenario(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.title} ({self.topic.slug})"
-
-
-class ScenarioSkill(models.Model):
-    scenario = models.ForeignKey(RoleplayScenario, on_delete=models.CASCADE)
-    skill = models.ForeignKey(Skill, on_delete=models.CASCADE)
-    order = models.IntegerField(default=0)
-
-    class Meta:
-        unique_together = ("scenario", "skill")
-        ordering = ["order", "id"]
-        indexes = [
-            models.Index(fields=["scenario", "order"]),
-            models.Index(fields=["skill", "order"]),
-        ]
-
-    def __str__(self):
-        return f"{self.scenario} ↔ {self.skill} (#{self.order})"
+        return f"{self.title} ({self.slug})"
 
 
 class RoleplayBlock(models.Model):
@@ -367,10 +430,14 @@ class RoleplayBlock(models.Model):
     lang_hint = models.CharField(max_length=10, blank=True)    
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
-    embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding = VectorField(dimensions=768, null=True, blank=True)
     embedding_text = models.TextField(blank=True)
     embedding_updated_at = models.DateTimeField(null=True, blank=True)
+    embedding_hash = models.CharField(max_length=64, blank=True, default="")
+    embedding_model = models.CharField(max_length=100, blank=True, default="")
+
 
     class Meta:
         ordering = ["scenario_id", "section", "order", "created_at"]
