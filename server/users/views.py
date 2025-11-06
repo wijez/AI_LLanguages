@@ -10,20 +10,31 @@ from rest_framework.views import APIView
 from utils.gencode import generate_verify_code, get_tokens_for_user
 from drf_spectacular.utils import extend_schema
 from utils.send_mail import send_verify_email
+from rest_framework.decorators import action
 
 from users.models import (
     User, AccountSetting, AccountSwitch
 )
 
-from users.serializers import (
-    UserMeSerializer, UserSerializer, AccountSettingSerializer, AccountSwitchSerializer, RegisterSerializer,
-    VerifyCodeSerializer, ResendVerifyCodeSerializer, LoginSerializer, ForgotPasswordSerializer
-)
+from users.serializers import *
 
 
 class UserViewset(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    """
+    {
+        "current_password": "old123",
+        "new_password": "NewStrongPass!23"
+    }
+    """
+    @action(detail=False, methods=["post"], url_path="me/change-password",
+            permission_classes=[IsAuthenticated])
+    def change_password(self, request):
+        ser = ChangePasswordSerializer(data=request.data, context={"request": request})
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        return Response({"message": "Đổi mật khẩu thành công"}, status=status.HTTP_200_OK)
 
 
 class AccountSettingViewset(viewsets.ModelViewSet):

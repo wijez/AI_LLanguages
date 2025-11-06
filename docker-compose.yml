@@ -38,8 +38,8 @@ services:
     container_name: pgadmin
     restart: always
     environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-viet.info.43@gmail.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-portgasDace}
     ports:
       - "5050:80"
     networks:
@@ -72,12 +72,24 @@ services:
       - minio-data:/data
     networks:
       - datn_net
+
+  redis_cache:
+    image: redis:latest
+    container_name: redis_cache
+    restart: always
+    ports:
+      - "6379:6379"  
+    volumes:
+      - redis_data:/data 
+    networks:
+      - datn_net
 volumes:
   ollama:
   openwebui:
   be_data:
   ai_data:
   minio-data:
+  redis_data:
 
 networks:
   datn_net:

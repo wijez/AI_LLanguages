@@ -277,11 +277,18 @@ class PronunciationPromptSerializer(serializers.ModelSerializer):
         fields = ["id", "word", "phonemes", "answer"]
         read_only_fields = ["id"]
 
+
 # Serializer cho Reading (đọc hiểu)
 class ReadingQuestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReadingQuestion
         fields = ["id", "question_text", "answer"]
+        read_only_fields = ["id"]
+
+class ReadingContentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReadingContent
+        fields = ["id", "passage"]
         read_only_fields = ["id"]
 
 # Serializer cho Writing (viết)
@@ -303,7 +310,7 @@ class SkillSerializer(serializers.ModelSerializer):
     reading_questions = ReadingQuestionSerializer(many=True, required=False)
     writing_questions = WritingQuestionSerializer(many=True, required=False)
     speaking_prompts = SpeakingPromptSerializer(many=True, required=False) 
-    reading_content = serializers.CharField(source="reading_content.passage", required=False, allow_blank=True)
+    reading_content = ReadingContentSerializer(read_only=True)
 
     title_i18n = serializers.JSONField(required=False)
     description_i18n = serializers.JSONField(required=False, allow_null=True)
@@ -720,3 +727,17 @@ class RoleplaySubmitFailOut(serializers.Serializer):
     score    = ScoreSerializer()
     feedback = serializers.CharField()
     expected_example = serializers.CharField()
+
+
+class LessonWithProgressSerializer(serializers.ModelSerializer):
+    total_skills = serializers.IntegerField(read_only=True)
+    completed_skills = serializers.IntegerField(read_only=True)
+    progress_pct = serializers.FloatField(read_only=True)
+    unlocked = serializers.BooleanField(read_only=True)
+    required_pct = serializers.IntegerField(read_only=True, default=80)
+
+    class Meta:
+        model = Lesson
+        fields = ["id", "title", "order", "xp_reward", "duration_seconds",
+                  "content", "total_skills", "completed_skills",
+                  "progress_pct", "unlocked", "required_pct"]

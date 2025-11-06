@@ -184,6 +184,7 @@ class ReadingContent(models.Model):
 class ReadingQuestion(models.Model):
     skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="reading_questions")
     question_text = models.TextField() 
+    # question_text_i18n = models.JSONField(default=dict, blank=True)
     answer = models.CharField(max_length=255)      
   
 

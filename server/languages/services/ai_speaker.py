@@ -1,4 +1,3 @@
-# languages/services/ai_speaker.py
 import os
 from typing import List
 from languages.models import RoleplayBlock

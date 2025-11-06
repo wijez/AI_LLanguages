@@ -6,7 +6,8 @@ from languages.views import *
 from progress.views import * 
 from vocabulary.views import * 
 from learning.views import * 
-
+from django.urls import re_path
+from social.consumers import LeaderboardConsumer
 
 router = DefaultRouter()
 
@@ -49,6 +50,12 @@ router.register(r'calendar-events', CalendarEventViewSet, basename='calendareven
 router.register(r'leaderboard-entries', LeaderboardEntryViewSet, basename='leaderboardentry')
 
 
+
 urlpatterns = router.urls + [
     path("export/chat_training.jsonl", export_chat_training, name="export_chat_training"),
+    path('leaderboard', LeaderboardAllView.as_view()),
+]
+
+websocket_urlpatterns = [
+    re_path(r"ws/leaderboard/$", LeaderboardConsumer.as_asgi()),
 ]

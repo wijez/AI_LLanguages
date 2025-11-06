@@ -1,4 +1,3 @@
-# languages/services/validate_turn.py
 import re, math, unicodedata
 from collections import Counter
 from difflib import SequenceMatcher

@@ -6,7 +6,7 @@ from drf_spectacular.utils import (
 from drf_spectacular.types import OpenApiTypes
 from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
-from django.db.models import F, Max, Prefetch
+from django.db.models import F, Max, Prefetch, Count
 from django.utils.text import slugify
 from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
@@ -275,31 +275,79 @@ class TopicViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='lessons')
     def lessons(self, request, pk=None):
         """
-        GET /api/topics/{id}/lessons/?include_skills=1
-        - Mặc định: trả list lesson theo order
+        GET /api/topics/{id}/lessons/?include_skills=1&include_progress=1
         - include_skills=1: trả kèm nested skills (đúng thứ tự trong lesson)
+        - include_progress=1: bồi progress (percent) + locked theo enrollment của user
         """
-        include_skills = str(request.query_params.get("include_skills", "0")) in ("1", "true", "yes")
+        include_skills = str(request.query_params.get("include_skills", "0")).lower() in ("1","true","yes")
+        include_progress = str(request.query_params.get("include_progress", "0")).lower() in ("1","true","yes")
 
         qs = (Lesson.objects
-              .filter(topic_id=pk)
-              .order_by("order", "id"))
+            .filter(topic_id=pk)
+            .order_by("order", "id"))
 
+        # Prefetch skills theo thứ tự trong lesson (KHÔNG dùng OuterRef trong Prefetch)
         if include_skills:
             qs = qs.prefetch_related(
                 Prefetch(
                     "skills",
-                    queryset=(Skill.objects
-                              .filter(is_active=True, lessonskill__lesson_id=models.OuterRef("pk"))
-                              .annotate(ls_order=F("lessonskill__order"))
-                              .order_by("ls_order", "id"))
+                    queryset=(
+                        Skill.objects
+                        .filter(is_active=True)
+                        .order_by("lessonskill__order", "id")
+                    )
                 )
             )
-            ser = LessonWithSkillsSerializer(qs, many=True, context=self.get_serializer_context())
-        else:
-            ser = LessonLiteSerializer(qs, many=True, context=self.get_serializer_context())
 
-        return Response(ser.data)
+        # --- Serialize base ---
+        if include_skills:
+            base = LessonWithSkillsSerializer(qs, many=True, context=self.get_serializer_context()).data
+        else:
+            base = LessonLiteSerializer(qs, many=True, context=self.get_serializer_context()).data
+
+        data = list(base)  # ép về list thường
+
+        # --- Bồi progress/locked nếu được yêu cầu & user có enrollment ---
+        if include_progress and request.user.is_authenticated:
+            topic = Topic.objects.select_related("language").get(pk=pk)
+            enrollment = LanguageEnrollment.objects.filter(
+                user_id=request.user.id,
+                language=topic.language
+            ).first()
+
+            if enrollment:
+                # annotate tổng/đã hoàn thành skill (status ∈ completed/mastered)
+                qs_prog = qs.annotate(
+                    total_skills=Count("skills", filter=Q(skills__is_active=True), distinct=True),
+                    done_skills=Count(
+                        "skills",
+                        filter=Q(
+                            skills__userskillstats__enrollment_id=enrollment.id,
+                            skills__userskillstats__status__in=["completed", "mastered"],
+                        ),
+                        distinct=True,
+                    ),
+                )
+                meta = {}
+                for row in qs_prog:
+                    total = int(getattr(row, "total_skills", 0) or 0)
+                    done = int(getattr(row, "done_skills", 0) or 0)
+                    pct = int(round(done * 100 / total)) if total else 0
+                    meta[row.id] = {"total": total, "done": done, "percent": pct, "order": row.order}
+
+                tp = TopicProgress.objects.filter(enrollment=enrollment, topic_id=pk).first()
+                highest = tp.highest_completed_order if tp else 0
+                unlock_order = (highest or 0) + 1
+                REQUIRED = 80
+
+                for item in data:
+                    m = meta.get(item["id"], {"total": 0, "done": 0, "percent": 0, "order": 0})
+                    item["progress"] = {"total": m["total"], "done": m["done"], "percent": m["percent"]}
+                    item["required_pct"] = REQUIRED
+                    ord_ = item.get("order") or m["order"] or 0
+                    item["locked"] = not (ord_ <= unlock_order)
+
+        return Response(data)
 
 # ---- SỬA LẠI CHO B2: Skill không còn topic/order; filter theo lessons__topic ----
 class SkillViewSet(mixins.ListModelMixin,

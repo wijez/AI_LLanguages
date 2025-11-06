@@ -46,3 +46,9 @@ class LeaderboardEntry(models.Model):
         constraints = [
             models.UniqueConstraint(fields=['user','language','date'], name='uq_leaderboard_user_lang_date')
         ]
+        indexes = [
+            models.Index(fields=['language', 'date', '-xp'], name='idx_lb_lang_date_xp_desc'),
+            models.Index(fields=['language', 'date', 'rank'], name='idx_lb_lang_date_rank'),
+            models.Index(fields=['user', 'date'], name='idx_lb_user_date'),
+        ]
+        ordering = ['-date', 'rank']

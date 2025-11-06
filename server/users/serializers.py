@@ -9,7 +9,9 @@ from django.contrib.auth.password_validation import validate_password
 class UserSerializer(serializers.ModelSerializer):
     class Meta: 
         model = User 
-        fields = '__all__'
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'avatar', 'bio', 'is_active', 'is_staff', 'is_superuser', 'last_login', 'last_active', 'date_joined')
+        read_only_fields = ('last_active', 'date_joined')
+        
 
 
 class AccountSettingSerializer(serializers.ModelSerializer):
@@ -93,3 +95,21 @@ class UserMeSerializer(serializers.ModelSerializer):
             "date_joined",
         )
         read_only_fields = fields
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        user = self.context["request"].user
+        if not user.check_password(attrs["current_password"]):
+            raise serializers.ValidationError({"current_password": "Mật khẩu hiện tại không đúng"})
+        validate_password(attrs["new_password"], user)
+        return attrs
+
+    def save(self, **kwargs):
+        user = self.context["request"].user
+        user.set_password(self.validated_data["new_password"]) 
+        user.save(update_fields=["password"])
+        return user

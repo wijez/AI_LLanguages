@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
 from pathlib import Path
+from celery.schedules import crontab
 from datetime import timedelta
 import os
 from utils.config_log import LOGGING as DJANGO_LOGGING
@@ -59,13 +60,22 @@ CORS_ALLOW_CREDENTIALS = True
 # (Tuỳ chọn) Cho phép các method
 from corsheaders.defaults import default_headers
 CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",      
+    "http://127.0.0.1:5173",
+]
 # Nếu dùng CSRF (SessionAuth), cần tin tưởng origin FE:
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
 
+
+SESSION_COOKIE_NAME = "sessionid"
+SESSION_COOKIE_SAMESITE = "Lax"   # nếu FE khác domain → dùng "None"
+SESSION_COOKIE_SECURE = False     # PROD: True
+CSRF_COOKIE_SAMESITE   = "Lax"    # nếu FE khác domain → "None"
+CSRF_COOKIE_SECURE     = False    # PROD: True
 # Application definition
 
 INSTALLED_APPS = [
@@ -88,10 +98,12 @@ INSTALLED_APPS = [
     'speech',
     "recommend",
     "corsheaders",
+    "channels",
     "pgvector.django",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware", 
     'django.middleware.security.SecurityMiddleware',
     'utils.middleware.RequestIDMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -100,8 +112,6 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    "corsheaders.middleware.CorsMiddleware", 
-    "django.middleware.common.CommonMiddleware",
 ]
 
 ROOT_URLCONF = 'server.urls'
@@ -123,6 +133,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'server.wsgi.application'
+ASGI_APPLICATION = "server.asgi.application"
 
 
 # Database
@@ -151,6 +162,42 @@ DATABASES = {
     }
 }
 
+
+# ========== CELERY SETTINGS ==========
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB   = os.getenv("REDIS_DB", "0")
+REDIS_URL  = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+
+# ===== Celery =====
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)         # redis://localhost:6379/0
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL) # redis://localhost:6379/0
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+
+# ===== Channels (WebSocket) =====
+ASGI_APPLICATION = "server.asgi.application"
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        # chấp nhận cả URL hoặc (host, port)
+        "CONFIG": {"hosts": [REDIS_URL]},  # hoặc [("localhost", 6379)]
+    }
+}
+
+# Chấp nhận nội dung JSON
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+
+# Múi giờ
+CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh' # Sửa lại cho đúng múi giờ của bạn
+USE_TZ = True # Đảm bảo Django cũng dùng timezone
+CELERY_BEAT_SCHEDULE = {
+    'update-daily-leaderboard-every-30-mins': {
+        'task': 'social.update_daily_leaderboard',
+        'schedule': crontab(minute='*/3'),  # Chạy mỗi 30 phút
+    },
+}
 
 
 # Password validation
@@ -199,7 +246,7 @@ REST_FRAMEWORK = {
     # Auth
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        # "rest_framework.authentication.SessionAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",

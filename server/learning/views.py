@@ -4,13 +4,13 @@ from rest_framework import viewsets, permissions, mixins
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
-from django.db.models import F, Prefetch
+from django.db.models import F, Prefetch, Count, Q
 
 from languages.models import (
     Lesson, Skill, LanguageEnrollment, UserSkillStats,
     SkillQuestion, SkillChoice, ListeningPrompt, PronunciationPrompt,
     ReadingContent, ReadingQuestion, WritingQuestion, SkillGap,
-    MatchingPair, OrderingItem, SpeakingPrompt
+    MatchingPair, OrderingItem, SpeakingPrompt, TopicProgress
 )
 from .models import LessonSession, SessionAnswer
 from vocabulary.models import Mistake, LearningInteraction
@@ -21,6 +21,7 @@ from .serializers import (
 )
 import re
 import unicodedata
+from social.services import award_xp_from_lesson
 
 
 # ============ Utils for checking ============
@@ -191,6 +192,41 @@ def _map_source_from_skill(skill: Skill) -> str:
     }
     return m.get(getattr(skill, "type", ""), "other")
 
+REQUIRED_PCT = 80
+def _compute_unlock_order(enrollment, topic_id, required_pct=REQUIRED_PCT):
+    """
+    Dựa trên SessionAnswer: bài nào có ≥ required_pct skill đã làm đúng
+    (tính trên mọi phiên của enrollment cho lesson đó) thì coi là 'đã qua'.
+    Trả về unlock_order = (highest_passed_order + 1).
+    """
+    # total skill/lesson
+    base = (
+        Lesson.objects
+        .filter(topic_id=topic_id)
+        .annotate(
+            total_skills=Count("skills", filter=Q(skills__is_active=True), distinct=True),
+            # số skill đã có ÍT NHẤT 1 câu đúng trong các session của enrollment cho CHÍNH lesson đó
+            done_skills=Count(
+                "sessions__answers__skill",
+                filter=Q(
+                    sessions__enrollment=enrollment,
+                    sessions__answers__is_correct=True,
+                ),
+                distinct=True,
+            ),
+        )
+        .values("id", "order", "total_skills", "done_skills")
+        .order_by("order", "id")
+    )
+
+    highest = 0
+    for row in base:
+        total = int(row["total_skills"] or 0)
+        done  = int(row["done_skills"] or 0)
+        pct   = (done * 100 // total) if total else 0
+        if pct >= required_pct and row["order"] > highest:
+            highest = row["order"]
+    return (highest or 0) + 1
 
 # ============ ViewSet ============
 class LessonSessionViewSet(mixins.RetrieveModelMixin,
@@ -223,6 +259,23 @@ class LessonSessionViewSet(mixins.RetrieveModelMixin,
             return Response({"detail": "Enrollment không thuộc user."}, status=403)
         if enrollment.language_id != lesson.topic.language_id:
             return Response({"detail": "Enrollment và Lesson không cùng ngôn ngữ."}, status=400)
+
+        tp, _ = TopicProgress.objects.get_or_create(
+            enrollment=enrollment,
+            topic_id=lesson.topic_id,
+            defaults={"highest_completed_order": 0} 
+        )
+        highest = tp.highest_completed_order
+        unlock_order = (highest or 0) + 1
+        if lesson.order > unlock_order:
+            return Response(
+                {
+                    "detail": "Lesson đang bị khóa. Hãy hoàn thành ≥ %d%% bài trước." % REQUIRED_PCT,
+                    "unlock_order": unlock_order,
+                    "current_order": lesson.order,
+                },
+                status=403,
+            )
 
         session = LessonSession.objects.create(
             user=request.user, lesson=lesson, enrollment=enrollment, status="in_progress"
@@ -269,8 +322,6 @@ class LessonSessionViewSet(mixins.RetrieveModelMixin,
         expected, prompt_text, skill_type = _get_expected_and_prompt(skill, qid)
         ok = _compare_answer(expected, user_answer, skill_type)
         # ---------------------
-
-        # Lưu câu trả lời vào SessionAnswer (KHÔNG có trường 'score' theo yêu cầu)
         SessionAnswer.objects.create(
             session=session,
             skill=skill,
@@ -407,7 +458,37 @@ class LessonSessionViewSet(mixins.RetrieveModelMixin,
             duration_seconds=session.duration_seconds, xp_earned=session.xp_earned, meta={}
         )
 
-        return Response(LessonSessionOut(session).data, status=200)
+        try:
+            # Chạy phép tính "nặng" _compute_unlock_order MỘT LẦN
+            unlock_order_new = _compute_unlock_order(
+                session.enrollment, 
+                session.lesson.topic_id, 
+                required_pct=REQUIRED_PCT
+            )
+            # unlock_order = highest + 1, nên highest = unlock_order - 1
+            highest_order_new = max(0, unlock_order_new - 1) 
+            
+            # Cập nhật hoặc tạo mới TopicProgress
+            TopicProgress.objects.update_or_create(
+                enrollment=session.enrollment,
+                topic_id=session.lesson.topic_id,
+                defaults={"highest_completed_order": highest_order_new}
+            )
+        except Exception as e:
+            print(f"Failed to update TopicProgress: {e}")
+        
+        if final_xp and final_xp > 0:
+            award_result = award_xp_from_lesson(
+                user=request.user,
+                source_id=session.id,   
+                amount=final_xp
+            )
+        else:
+            award_result = {"ok": True, "awarded": False, "reason": "lesson_xp_zero"}
+        resp = LessonSessionOut(session).data
+        resp["xp_award"] = award_result 
+
+        return Response(resp, status=200)
 
     @action(detail=True, methods=["post"], url_path="cancel")
     @transaction.atomic
