@@ -8,6 +8,8 @@ from sklearn.ensemble import GradientBoostingClassifier
 import joblib
 from django.conf import settings
 from django.utils import timezone
+import logging
+logger = logging.getLogger(__name__)
 
 def _s3_opts():
     return {
@@ -60,19 +62,22 @@ def train_from_snapshot(snapshot_id: str, params: Dict[str,Any]) -> Dict[str,Any
     ydf = pd.read_parquet(paths["labels"],   storage_options=_s3_opts())
 
     # Khóa join
-    if "id" not in X.columns:
-        raise ValueError("features.parquet missing 'id' column")
-    if "recommendation_id" not in ydf.columns:
-        raise ValueError("labels.parquet missing 'recommendation_id' column")
+    if "enrollment_id" not in X.columns:
+        raise ValueError("features.parquet (X) missing 'enrollment_id' column")
+    if "enrollment_id" not in ydf.columns:
+        raise ValueError("labels.parquet (Y) missing 'enrollment_id' column")
+    if "target_completed" not in ydf.columns:
+        raise ValueError("labels.parquet (Y) missing 'target_completed' column")
 
     df = X.merge(
-        ydf[["recommendation_id", "target_completed"]],
-        left_on="id", right_on="recommendation_id",
+        ydf[["enrollment_id", "target_completed"]],
+        on="enrollment_id",
         how="left"
     ).copy()
+    # Điền 0 cho những enrollment không có interaction
     df["target_completed"] = df["target_completed"].fillna(0).astype(int)
 
-    drop_cols = {"id","user_id","enrollment_id","lesson_id","skill_id","word_id","created_at","last_practiced","recommendation_id"}
+    drop_cols = {"id","user_id","enrollment_id","lesson_id","skill_id","word_id","created_at","last_practiced"}
 
     numeric_cols = set(df.select_dtypes(include=["number"]).columns)
     feat_cols = list(numeric_cols - drop_cols)
@@ -82,7 +87,15 @@ def train_from_snapshot(snapshot_id: str, params: Dict[str,Any]) -> Dict[str,Any
     Xmat = df[feat_cols]
     y = df["target_completed"]
 
-    stratify = y if y.nunique() > 1 else None
+    logger.info(f"Tổng số mẫu train (trước khi split): {y.shape[0]}")
+    logger.info(f"Phân phối lớp (y.value_counts()):\n{y.value_counts(dropna=False)}")
+    stratify = None
+    if y.nunique() > 1:
+        # Kiểm tra số lượng của lớp nhỏ nhất
+        min_class_count = y.value_counts().min()
+        # Chỉ stratify nếu lớp nhỏ nhất có ít nhất 2 mẫu (để chia)
+        if min_class_count >= 2:
+            stratify = y
     X_train, X_val, y_train, y_val = train_test_split(
         Xmat, y, test_size=0.2, random_state=42, stratify=stratify
     )

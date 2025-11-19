@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from vocabulary.models import (
-    AudioAsset,KnownWord , Translation, Word, WordRelation, Language, LearningInteraction, Mistake
+   KnownWord , Translation, Word, Language, LearningInteraction, Mistake
 )
 
 class WordListSerializer(serializers.ListSerializer):
@@ -29,16 +29,17 @@ class WordListSerializer(serializers.ListSerializer):
         return instances
 
 
-class AudioAssetSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = AudioAsset
-        fields = '__all__'
-
-
 class KnownWordSerializer(serializers.ModelSerializer):
     class Meta:
         model = KnownWord
         fields = '__all__'
+    
+    def validate(self, attrs):
+        enr = attrs.get("enrollment")
+        w   = attrs.get("word")
+        if enr and w and enr.language_id != w.language_id:
+            raise serializers.ValidationError("Word phải cùng ngôn ngữ với LanguageEnrollment.")
+        return attrs
 
 
 class TranslationSerializer(serializers.ModelSerializer):
@@ -66,44 +67,6 @@ class WordSerializer(serializers.ModelSerializer):
         list_serializer_class = WordListSerializer
     
 
-
-class WordRelationSerializer(serializers.ModelSerializer):
-    language = serializers.SlugRelatedField(
-        slug_field="abbreviation",
-        queryset=Language.objects.all(),
-        write_only=True
-    )
-    word_text = serializers.CharField(write_only=True)
-    related_text = serializers.CharField(write_only=True)
-
-    text = serializers.CharField(source="related.text", read_only=True)
-    normalized = serializers.CharField(source="related.normalized", read_only=True)
-    part_of_speech = serializers.CharField(source="related.part_of_speech", read_only=True)
-
-    class Meta:
-        model = WordRelation
-        fields = ["relation_type", "language", "word_text", "related_text",
-                  "text", "normalized", "part_of_speech"]
-
-    def create(self, validated_data):
-        lang = validated_data.pop("language")
-        word_text = validated_data.pop("word_text").lower()
-        related_text = validated_data.pop("related_text").lower()
-        rel_type = validated_data.get("relation_type", "")
-
-        try:
-            word = Word.objects.get(language=lang, normalized=word_text)
-            related = Word.objects.get(language=lang, normalized=related_text)
-        except Word.DoesNotExist:
-            raise serializers.ValidationError("Word hoặc related không tồn tại trong DB.")
-
-        relation, _ = WordRelation.objects.get_or_create(
-            word=word,
-            related=related,
-            relation_type=rel_type
-        )
-        return relation
-
 class LearningInteractionSerializer(serializers.ModelSerializer):
     class Meta:
         model = LearningInteraction
@@ -117,15 +80,6 @@ class MistakeSerializer(serializers.ModelSerializer):
         read_only_fields = ["user","enrollment","timestamp"]
 
 
-class WordDetailSerializer(serializers.ModelSerializer):
-    language = serializers.SlugRelatedField(
-        slug_field="abbreviation",
-        read_only=True
-    )
-    relations = WordRelationSerializer(many=True, read_only=True)
 
-    class Meta:
-        model = Word
-        fields = ["id", "language", "text", "normalized", "part_of_speech", "relations"]
 
 

@@ -53,8 +53,12 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 CORS_ALLOW_ALL_ORIGINS = True
 
 # Nếu bạn gửi cookie/session hoặc dùng CSRF:
-CORS_ALLOW_CREDENTIALS = True
-
+CORS_ALLOW_CREDENTIALS = False
+CORS_ALLOW_HEADERS = [
+    'authorization',
+    'content-type',
+    'ngrok-skip-browser-warning',
+]
 # Thường không cần đổi, nhưng nếu cần Authorization header:
 
 # (Tuỳ chọn) Cho phép các method
@@ -63,11 +67,21 @@ CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",      
     "http://127.0.0.1:5173",
+    "https://ai-l-languages-fe-dfyo.vercel.app",
+    "https://ai-l-languages-fe-5vkw.vercel.app",
+    "https://ai-l-languages-fe-pr4t.vercel.app",
+    "https://ai-l-languages-fe.vercel.app",
+    
 ]
 # Nếu dùng CSRF (SessionAuth), cần tin tưởng origin FE:
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://ai-l-languages-fe-dfyo.vercel.app",
+    "https://ai-l-languages-fe-5vkw.vercel.app",
+    "https://ai-l-languages-fe-pr4t.vercel.app",
+    "https://d5e6478e8939.ngrok-free.app", 
+    "https://ai-l-languages-fe.vercel.app",
 ]
 
 
@@ -100,11 +114,12 @@ INSTALLED_APPS = [
     "corsheaders",
     "channels",
     "pgvector.django",
+    "django_filters",
 ]
 
 MIDDLEWARE = [
+     'django.middleware.security.SecurityMiddleware',
     "corsheaders.middleware.CorsMiddleware", 
-    'django.middleware.security.SecurityMiddleware',
     'utils.middleware.RequestIDMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -133,7 +148,6 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'server.wsgi.application'
-ASGI_APPLICATION = "server.asgi.application"
 
 
 # Database
@@ -178,6 +192,7 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 ASGI_APPLICATION = "server.asgi.application"
 CHANNEL_LAYERS = {
     "default": {
+        # "BACKEND": "channels.layers.InMemoryChannelLayer",
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         # chấp nhận cả URL hoặc (host, port)
         "CONFIG": {"hosts": [REDIS_URL]},  # hoặc [("localhost", 6379)]
@@ -197,7 +212,7 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'social.update_daily_leaderboard',
         'schedule': crontab(minute='*/3'),  # Chạy mỗi 30 phút
     },
-}
+}       
 
 
 # Password validation
@@ -254,6 +269,11 @@ REST_FRAMEWORK = {
 
     # Pagination
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.SearchFilter",
+        "rest_framework.filters.OrderingFilter",
+    ],
     "PAGE_SIZE": 20,
 
     # Schema
@@ -324,10 +344,22 @@ RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "http://localhost:11435")
 RAG_OLLAMA_EMBED_MODEL = os.getenv("RAG_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
 RAG_SCORE_THRESH = 0.25
 
-MEDIA_URL = "/media/"
+MEDIA_URL = "/media/"   
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
 
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "") 
+
+# ==== TTS ====
+PIPER_BIN = os.environ.get("PIPER_BIN", "piper") 
+PIPER_TMP_DIR = r"D:\AI_LL\tmp"
+PIPER_VOICE_DIR = os.environ.get("PIPER_VOICE_DIR", os.path.join(BASE_DIR, "voices"))
+PIPER_VOICES = {
+    # map ngôn ngữ L2 → file giọng .onnx/.onnx.json trong PIPER_VOICE_DIR
+    "en": "en_US-amy-medium.onnx",
+    "vi": "vi_VN-25hours_single-low.onnx",
+    "zh": "zh_CN-huayan-medium.onnx",
+}
+
 
 

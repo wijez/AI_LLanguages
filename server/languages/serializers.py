@@ -4,7 +4,6 @@ from languages.models import *
 from django.db.models import Q
 from django.utils.text import slugify
 from django.db import transaction, IntegrityError
-from rest_framework import serializers
 
 
 class LanguageListSerializer(serializers.ListSerializer):
@@ -222,12 +221,13 @@ class SkillChoiceSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"] 
 
 class SkillQuestionSerializer(serializers.ModelSerializer):
+    question_text_i18n = serializers.JSONField(required=False, allow_null=True)
     choices = SkillChoiceSerializer(many=True) 
     answer = serializers.CharField(write_only=True, required=False, allow_blank=False)
 
     class Meta:
         model = SkillQuestion
-        fields = ["id", "question_text", "choices", "answer"]
+        fields = ["id", "question_text","question_text_i18n", "choices", "answer"]
         read_only_fields = ["id"]
     
     def validate(self, attrs):

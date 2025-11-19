@@ -1,4 +1,6 @@
+import os
 import subprocess
+from django.db.models.base import transaction
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
@@ -14,15 +16,23 @@ import hashlib
 from django.utils.timezone import now
 from mimetypes import guess_extension
 
+from languages.models import LanguageEnrollment, PronunciationPrompt, Skill
+from learning.models import PronAttempt, SkillSession
+
 from .serializers import (
     TTSRequestSerializer, TTSResponseSerializer,
     PronScoreRequestSerializer, PronScoreResponseSerializer,
-    PronScoreAnySerializer
+    PronScoreAnySerializer, PronTTSSampleIn
 )
 from drf_spectacular.utils import (
     extend_schema, OpenApiExample, OpenApiResponse
 )
-from .services import tts_synthesize, stt_transcribe, simple_pron_score, stt_transcribe_with_debug
+from .services import tts_synthesize, stt_transcribe, simple_pron_score, stt_transcribe_with_debug,  _ffprobe_json, _probe_duration_sec
+
+def _tts_cache_key(text: str) -> str:
+    # chỉ 1 ngôn ngữ, nên hash theo text đã chuẩn hóa (strip + nén khoảng trắng)
+    norm = " ".join((text or "").strip().split())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
 class TextToSpeechView(APIView):
@@ -43,10 +53,24 @@ class TextToSpeechView(APIView):
         lang = s.validated_data.get("lang") or "en"
 
         # 1) Sinh audio (base64, mimetype)
-        audio_b64, mimetype = tts_synthesize(text, lang)
+        # audio_b64, mimetype = tts_synthesize(text, lang)
+        try:
+            audio_b64, mimetype = tts_synthesize(text, lang)
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "TTS provider failed",
+                    "hint": "Ưu tiên cài Piper + voice; nếu không có, đảm bảo mạng khi dùng gTTS.",
+                    "error": str(e),
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         # 2) Lưu file vào MEDIA_ROOT/tts/<uuid>.mp3
-        filename = f"tts/{uuid4().hex}.mp3"
+        hexhash = hashlib.sha1(f"{lang}|{text}".encode("utf-8")).hexdigest()[:20]
+        # filename = f"tts/{uuid4().hex}.mp3"
+        filename = f"tts/{lang}/{hexhash}.mp3"
+
         content = ContentFile(base64.b64decode(audio_b64))
         saved_path = default_storage.save(filename, content)
 
@@ -193,7 +217,78 @@ class PronScoreUpAPIView(APIView):
             "saved_path": rel_path,
             "file_url": file_url,
         }
+        # === GHI LỊCH SỬ PronAttempt (chỉ khi user đã xác thực) ===
+        if request.user and request.user.is_authenticated:
+            session_obj = None
 
+            # 1) Ưu tiên: nhận skill_session (PK id, int) từ client
+            raw_sid = request.data.get("skill_session")
+            if raw_sid is not None:
+                try:
+                    sid = int(str(raw_sid).strip())
+                except (ValueError, TypeError):
+                    return Response({"detail": "skill_session phải là số nguyên (id)."}, status=400)
+
+                session_obj = SkillSession.objects.filter(id=sid, user=request.user).first()
+                if session_obj is None:
+                    return Response({"detail": "Không tìm thấy phiên hoặc không thuộc bạn."}, status=404)
+
+            # 2) Fallback: nếu không gửi skill_session, cho phép auto-create khi có skill_id + enrollment_id
+            if session_obj is None:
+                skill_id = request.data.get("skill_id")
+                enrollment_id = request.data.get("enrollment_id")
+                lesson_id = request.data.get("lesson_id")  # optional
+
+                if skill_id and enrollment_id:
+                    try:
+                        skill = Skill.objects.get(pk=int(skill_id))
+                        enrollment = LanguageEnrollment.objects.get(pk=int(enrollment_id), user=request.user)
+                    except (ValueError, Skill.DoesNotExist, LanguageEnrollment.DoesNotExist):
+                        return Response({"detail": "skill_id hoặc enrollment_id không hợp lệ."}, status=400)
+
+                    # Kiểm tra cùng ngôn ngữ
+                    lang_abbr = getattr(enrollment.language, "abbreviation", "").lower()
+                    if (skill.language_code or "").lower() != lang_abbr:
+                        return Response({"detail": "Enrollment và Skill không cùng ngôn ngữ."}, status=400)
+
+                    session_obj = SkillSession.objects.create(
+                        user=request.user,
+                        enrollment=enrollment,
+                        skill=skill,
+                        lesson_id=int(lesson_id) if lesson_id else None,
+                        status="in_progress",
+                        meta={"source": "pron_up_autostart"},
+                    )
+                else:
+                    return Response(
+                        {"detail": "Cần truyền skill_session (id) hoặc skill_id + enrollment_id để tạo mới."},
+                        status=400,
+                    )
+
+            # 3) Ghi attempt
+            prompt_obj = None
+            prompt_id = request.data.get("prompt_id")
+            if prompt_id:
+                try:
+                    prompt_obj = PronunciationPrompt.objects.get(pk=int(prompt_id), skill=session_obj.skill)
+                except Exception:
+                    prompt_obj = None
+
+            PronAttempt.objects.create(
+                session=session_obj,
+                prompt_id=prompt_obj,
+                expected_text=expected_text,
+                recognized=recognized_text,
+                score_overall=float(out["overall"]),
+                words=out["words"],
+                details=out["details"],
+                audio_path=rel_path,  # MEDIA relative path
+            )
+
+            # cập nhật stats nhanh cho session
+            session_obj._recalc_scores()
+            session_obj.last_activity = now()
+            session_obj.save(update_fields=["attempts_count", "best_score", "avg_score", "last_activity"])
         # Trả kết quả + debug (ffmpeg/probe) từ cả STT & Score
         resp = {
             "recognized": recognized_text,
@@ -205,3 +300,112 @@ class PronScoreUpAPIView(APIView):
             "debug_score": out.get("debug"), 
         }
         return Response(resp, status=200)
+
+
+class PronunciationTTSSampleView(APIView):
+    """
+    POST /api/speech/pron/tts/
+    Body: { "prompt_id": <id>, "lang": "vi|en|zh" (optional) }
+
+    Lần đầu: synth + lưu file vào prompt.tts_file
+    Lần sau: trả file đã cache (không synth lại)
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        s = PronTTSSampleIn(data=request.data)
+        s.is_valid(raise_exception=True)
+
+        prompt_id = s.validated_data["prompt_id"]
+        lang = (s.validated_data.get("lang") or "en").lower().strip()
+
+        with transaction.atomic():
+            try:
+                prompt = (
+                    PronunciationPrompt.objects
+                    .select_for_update()
+                    .get(id=prompt_id)
+                )
+            except PronunciationPrompt.DoesNotExist:
+                return Response({"detail": "prompt_not_found"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Text để đọc (ưu tiên answer, fallback word)
+            text = (prompt.answer or prompt.word or "").strip()
+            if not text:
+                return Response({"detail": "empty_prompt_text"}, status=status.HTTP_400_BAD_REQUEST)
+
+            tkey = _tts_cache_key(text)
+
+            # ==== 1) CACHE HIT (và file còn tồn tại) ====
+            storage = prompt.tts_file.storage if prompt.tts_file else None
+            cached_ok = False
+            if prompt.tts_file and prompt.tts_hash == tkey and storage:
+                try:
+                    cached_ok = storage.exists(prompt.tts_file.name)
+                except Exception:
+                    cached_ok = False
+
+            if cached_ok:
+                # absolute URL để FE dùng trực tiếp
+                abs_url = request.build_absolute_uri(prompt.tts_file.url)
+
+                # (tuỳ chọn) kèm base64: FE có thể ưu tiên URL, fallback base64
+                b64 = None
+                try:
+                    with storage.open(prompt.tts_file.name, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("utf-8")
+                except Exception:
+                    pass
+
+                return Response({
+                    "cached": True,
+                    "mimetype": prompt.tts_mime,
+                    "audio_base64": b64,
+                    "url": abs_url,
+                    "duration": prompt.tts_duration,
+                    "provider": prompt.tts_provider,
+                })
+
+            # ==== 2) CACHE MISS → synth (Piper trước, gTTS fallback trong services) ====
+            audio_b64, mimetype = tts_synthesize(text, lang)
+
+            # Thư mục & file đích
+            rel_dir = os.path.join("tts", "pron", f"{prompt.id % 100:02d}")
+            abs_dir = os.path.join(settings.MEDIA_ROOT, rel_dir)
+            os.makedirs(abs_dir, exist_ok=True)
+
+            rel_filename = f"{prompt.id}-{tkey}.mp3"
+            rel_path_fs = os.path.join(rel_dir, rel_filename)        # path FS (có thể có '\')
+            abs_path = os.path.join(settings.MEDIA_ROOT, rel_path_fs)
+
+            # Ghi file
+            with open(abs_path, "wb") as f:
+                f.write(base64.b64decode(audio_b64))
+
+            # Lấy duration (optional)
+            try:
+                meta = _ffprobe_json(abs_path)
+                duration = float(_probe_duration_sec(meta) or 0.0)
+            except Exception:
+                duration = 0.0
+
+            # Ghi vào model: name dùng forward-slash để URL luôn đúng trên Windows
+            rel_path_url = rel_path_fs.replace(os.sep, "/")
+            prompt.tts_file.name = rel_path_url
+            prompt.tts_mime = mimetype
+            prompt.tts_hash = tkey
+            prompt.tts_duration = duration
+            prompt.tts_provider = "piper"
+            prompt.save(update_fields=["tts_file", "tts_mime", "tts_hash", "tts_duration", "tts_provider"])
+
+        # Build absolute URL từ FileField.url (chuẩn nhất)
+        abs_url = request.build_absolute_uri(prompt.tts_file.url)
+
+        return Response({
+            "cached": False,
+            "mimetype": mimetype,
+            "audio_base64": audio_b64,   # cho phát ngay lần đầu
+            "url": abs_url,              # FE nên ưu tiên dùng URL (đã cache)
+            "duration": duration,
+            "provider": "piper",
+        })

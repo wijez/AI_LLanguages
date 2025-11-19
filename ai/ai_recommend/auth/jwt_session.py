@@ -49,7 +49,7 @@ class JWTSession:
     username: str
     password: str
     token_url: str = "/api/users/login/"
-    refresh_url: str = ""                    # để trống nếu không có refresh
+    refresh_url: str = "/api/users/token/refresh/"     
     timeout: float = 15.0
 
     access: Optional[str] = None

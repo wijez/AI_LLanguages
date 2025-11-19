@@ -15,6 +15,12 @@ class User(AbstractUser):
         null=True
     )
     last_active = models.DateTimeField(default=timezone.now)
+    active_refresh_jti = models.CharField(
+        max_length=255, 
+        blank=True, 
+        null=True, 
+        unique=True
+    )
     
 
 class AccountSetting(models.Model):

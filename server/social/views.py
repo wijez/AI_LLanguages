@@ -1,10 +1,10 @@
 from django.shortcuts import render
-from rest_framework import viewsets
-from rest_framework.permissions import AllowAny
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from languages.models import LanguageEnrollment
-from social.serializers import (
-    CalendarEventSerializer, FriendSerializer, LeaderboardEntrySerializer
-)
+from utils.send_mail import send_user_email
+from social.serializers import *
 from social.models import (
     Friend, CalendarEvent, LeaderboardEntry
 )
@@ -14,11 +14,80 @@ from django.db.models import Window
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from users.models import User
+from social.services import recalc_badges_for_user
+import logging
+logger = logging.getLogger(__name__)
 
 
 class FriendViewSet(viewsets.ModelViewSet):
-    queryset = Friend.objects.all()
+    """
+    /friends/:
+      - POST: gửi lời mời (from_user = request.user, accepted=False)
+      - GET:  xem tất cả quan hệ (chỉ các quan hệ có liên quan đến request.user)
+    /friends/{id}/accept/: chỉ user là to_user mới được accept
+    """
     serializer_class = FriendSerializer
+    permission_classes = [IsAuthenticated]
+    def get_queryset(self):
+        u = self.request.user
+        return Friend.objects.filter(Q(from_user=u) | Q(to_user=u)).select_related("from_user", "to_user")
+
+    def perform_create(self, serializer):
+        to_user = serializer.validated_data.get("to_user")
+        me = self.request.user
+        if not to_user or to_user == me:
+            raise serializers.ValidationError({"to_user": "to_user không hợp lệ."})
+
+        # Chặn trùng 2 chiều (A->B hoặc B->A, pending/accepted)
+        exists = Friend.objects.filter(
+            (Q(from_user=me, to_user=to_user) | Q(from_user=to_user, to_user=me))
+        ).exists()
+        if exists:
+            raise serializers.ValidationError({"detail": "Quan hệ/bạn bè đã tồn tại hoặc đang chờ."})
+
+        fr = serializer.save(from_user=me, accepted=False)
+        try:
+            from_name = (
+                (getattr(me, "get_full_name", None) or (lambda: ""))()
+                or getattr(me, "username", "")
+                or me.email
+            )
+            send_user_email(
+                to_user,
+                template_key="friend_request",
+                subject="[Aivory] Bạn có lời mời kết bạn mới",
+                from_username=from_name,
+            )
+        except Exception as e:
+            logger.warning("Send friend request email failed: %s", e)
+
+    @action(detail=True, methods=["post"])
+    def accept(self, request, pk=None):
+        """
+        Chỉ người nhận (to_user) mới được accept.
+        """
+        try:
+            fr = self.get_queryset().get(pk=pk)
+        except Friend.DoesNotExist:
+            return Response({"detail": "Không tìm thấy lời mời."}, status=status.HTTP_404_NOT_FOUND)
+
+        if fr.to_user != request.user:
+            return Response({"detail": "Bạn không có quyền chấp nhận lời mời này."}, status=status.HTTP_403_FORBIDDEN)
+
+        if fr.accepted:
+            return Response({"detail": "Đã là bạn bè."}, status=status.HTTP_400_BAD_REQUEST)
+
+        fr.accepted = True
+        fr.save(update_fields=["accepted", "updated_at"])
+
+        try:
+            recalc_badges_for_user(fr.from_user, limit_types=["friend_count"])
+            recalc_badges_for_user(fr.to_user,   limit_types=["friend_count"])
+        except Exception as e:
+            print("[badges] recalc after friend accept failed:", e)
+
+        return Response(FriendSerializer(fr).data, status=status.HTTP_200_OK)
+
 
 
 class CalendarEventViewSet(viewsets.ModelViewSet):
@@ -57,8 +126,6 @@ class LeaderboardAllView(APIView):
     def get(self, request):
         limit = int(request.query_params.get('limit', 50))
         friends_only = request.query_params.get('friends_only') == '1'
-
-        # [LOGIC MỚI]
         # Lấy "toàn bộ kinh nghiệm" từ LanguageEnrollment.total_xp
         base = (
             LanguageEnrollment.objects
@@ -107,3 +174,21 @@ class LeaderboardAllView(APIView):
         } for r in rows]
 
         return Response(data)
+
+
+class BadgeViewSet(viewsets.ModelViewSet):
+    queryset = Badge.objects.all()
+    serializer_class = BadgeSerializer
+    permission_classes = [IsAuthenticated]
+
+class UserBadgeViewSet(viewsets.ModelViewSet):
+    serializer_class = UserBadgeSerializer
+    permission_classes = [IsAuthenticated]
+    def get_queryset(self):
+        return UserBadge.objects.filter(user=self.request.user)
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+    def get_queryset(self):
+        return Notification.objects.filter(user=self.request.user)

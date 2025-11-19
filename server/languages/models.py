@@ -165,11 +165,24 @@ class ListeningPrompt(models.Model):
         return f"ListeningPrompt({self.id}) for Skill({self.skill_id})"
 
 # --- Model cho loại Pronunciation (Phát âm) ---
+def pron_upload_to(instance, filename):
+    # tts/pron/<prompt_id % 100>/<prompt_id>-<hash>.mp3
+    h = (instance.tts_hash or "v1")
+    return f"tts/pron/{instance.id % 100:02d}/{instance.id}-{h}.mp3"
+    
 class PronunciationPrompt(models.Model):
     skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="pronunciation_prompts")
     word = models.CharField(max_length=100)        # từ hoặc cụm từ cần phát âm
     phonemes = models.CharField(max_length=100, blank=True)  # phiên âm hoặc chú thích phát âm (nếu có)
     answer = models.CharField(max_length=100, blank=True)   
+
+    tts_file = models.FileField(upload_to=pron_upload_to, blank=True, null=True)
+    tts_mime = models.CharField(max_length=64, default="audio/mpeg")
+    tts_hash = models.CharField(max_length=64, blank=True, default="")  # sha256(text chuẩn hóa)
+    tts_duration = models.FloatField(default=0.0)                       # giây (optional)
+    tts_provider = models.CharField(max_length=20, default="piper")     # 'piper' hoặc 'gtts'
+    updated_at = models.DateTimeField(auto_now=True)
+
 
     def __str__(self):
         return f"PronunciationPrompt({self.word}) for Skill({self.skill_id})"

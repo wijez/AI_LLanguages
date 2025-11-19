@@ -9,4 +9,9 @@ def generate_verify_code():
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
-    return {"refresh": str(refresh), "access": str(refresh.access_token)}
+    user.active_refresh_jti = refresh.get('jti') 
+    user.save(update_fields=['active_refresh_jti'])
+    return {
+        "refresh": str(refresh),
+        "access": str(refresh.access_token),
+    }

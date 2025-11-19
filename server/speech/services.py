@@ -12,6 +12,10 @@ from gtts import gTTS
 from jiwer import wer, cer
 import whisper
 from difflib import SequenceMatcher
+import shutil
+from django.conf import settings
+import logging
+logger = logging.getLogger(__name__)
 
 # =========================
 # Debug switch
@@ -29,6 +33,182 @@ def get_model():
         _model = whisper.load_model("small")
     return _model
 
+# ở đầu file (thêm import)
+import unicodedata
+from pathlib import Path
+
+def _sanitize_for_piper(text: str) -> str:
+    """Loại surrogate/emoji/ZWJ và normalize để piper/espeak không lỗi."""
+    if not isinstance(text, str):
+        text = str(text)
+    # bỏ surrogate range (U+D800..U+DFFF)
+    text = re.sub(r'[\ud800-\udfff]', '', text)
+    # bỏ ZWJ & variation selectors (hay gây lỗi với espeak)
+    text = re.sub(r'[\u200d\ufe0e\ufe0f]', '', text)
+    # chuẩn hóa Unicode
+    try:
+        text = unicodedata.normalize("NFC", text)
+    except Exception:
+        pass
+    # loại control chars không in được (giữ lại khoảng trắng / newline / tab)
+    text = ''.join(ch if ch.isprintable() or ch in '\n\r\t ' else ' ' for ch in text)
+    # gọn khoảng trắng
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def _tts_piper_to_mp3_b64(text: str, lang: str) -> str:
+    bin_path, voice_dir, voices = _piper_conf()
+
+    if not shutil.which(bin_path):
+        raise RuntimeError("piper_not_found")
+
+    lang = (lang or "en").lower().strip()
+    voice_file = voices.get(lang) or voices.get("en")
+    if not voice_file:
+        raise RuntimeError("piper_voice_not_configured")
+
+    model_path = voice_file if os.path.isabs(voice_file) else os.path.join(voice_dir, voice_file)
+    if not os.path.exists(model_path):
+        raise RuntimeError(f"piper_voice_missing:{model_path}")
+
+    # tìm file config .json đi kèm
+    cands = [
+        model_path + ".json",
+        model_path.replace(".onnx", ".onnx.json"),
+        model_path.replace(".onnx", ".json"),
+    ]
+    config_path = next((p for p in cands if os.path.exists(p)), None)
+    if not config_path:
+        raise RuntimeError(f"piper_config_missing:{model_path}.json")
+
+    # env “an toàn” cho Windows temp
+    tmp_dir = Path(getattr(settings, "PIPER_TMP_DIR", Path(getattr(settings, "BASE_DIR", Path.cwd())) / "tmp")).resolve()
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.update({
+        "TMP": str(tmp_dir),
+        "TEMP": str(tmp_dir),
+        "TMPDIR": str(tmp_dir),
+        "PYTHONIOENCODING": "utf-8",
+    })
+
+    clean = _sanitize_for_piper(text)
+
+    # 1) thử stdout
+    try:
+        p = subprocess.run(
+            [bin_path, "--model", model_path, "--config", config_path, "--output_file", "-"],
+            input=clean.encode("utf-8", "ignore"),
+            capture_output=True,
+            check=True,
+            env=env,
+        )
+        wav_bytes = p.stdout
+        if not wav_bytes:
+            raise RuntimeError("piper_no_audio_stdout")
+        return _wav_bytes_to_mp3_b64(wav_bytes)
+    except Exception as e1:
+        # 2) thử ghi file tạm
+        tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+        try:
+            p2 = subprocess.run(
+                [bin_path, "--model", model_path, "--config", config_path, "--output_file", tmp_wav],
+                input=clean.encode("utf-8", "ignore"),
+                capture_output=True,
+                check=True,
+                env=env,
+            )
+            if not os.path.exists(tmp_wav) or os.path.getsize(tmp_wav) == 0:
+                raise RuntimeError(f"piper_no_audio_file rc={p2.returncode} stderr={p2.stderr.decode(errors='ignore')}")
+            with open(tmp_wav, "rb") as f:
+                wav_bytes = f.read()
+            return _wav_bytes_to_mp3_b64(wav_bytes)
+        finally:
+            _safe_remove(tmp_wav)
+
+
+def _piper_conf():
+    """
+    Lấy cấu hình Piper từ settings hoặc ENV:
+      - PIPER_BIN: đường dẫn 'piper' (vd 'piper' hoặc 'C:\\tools\\piper.exe')
+      - PIPER_VOICE_DIR: thư mục chứa các model .onnx
+      - PIPER_VOICES: map ngôn ngữ -> tên file model (tương đối so với VOICE_DIR hoặc path tuyệt đối)
+    """
+    bin_path = getattr(settings, "PIPER_BIN", os.environ.get("PIPER_BIN", "piper"))
+    voice_dir = getattr(settings, "PIPER_VOICE_DIR", os.environ.get("PIPER_VOICE_DIR", os.path.join(os.getcwd(), "voices")))
+    voices = getattr(settings, "PIPER_VOICES", None)
+    if not voices:
+        voices = {
+            "en": "en_US-amy-medium.onnx",
+            "vi": "vi_VN-25hours_single-low.onnx",
+            "zh": "zh_CN-huayan-medium.onnx",
+        }
+    return bin_path, voice_dir, voices
+
+def _wav_bytes_to_mp3_b64(wav_bytes: bytes) -> str:
+    """
+    Dùng ffmpeg để convert WAV bytes -> MP3 (base64 không kèm prefix data:).
+    Cần có ffmpeg trong PATH.
+    """
+    p = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "mp3", "pipe:1"],
+        input=wav_bytes, capture_output=True, check=True
+    )
+    return base64.b64encode(p.stdout).decode("utf-8")
+
+# def _tts_piper_to_mp3_b64(text: str, lang: str) -> str:
+#     """
+#     Sinh giọng bằng Piper và trả MP3 base64. Ném Exception nếu thiếu piper/voice/ffmpeg.
+#     """
+#     bin_path, voice_dir, voices = _piper_conf()
+
+#     # 1) phải có piper
+#     if not shutil.which(bin_path):
+#         raise RuntimeError("piper_not_found")
+
+#     # 2) lấy model theo lang (fallback 'en')
+#     lang = (lang or "en").lower().strip()
+#     voice_file = voices.get(lang) or voices.get("en")
+#     if not voice_file:
+#         raise RuntimeError("piper_voice_not_configured")
+
+#     model_path = voice_file if os.path.isabs(voice_file) else os.path.join(voice_dir, voice_file)
+#     if not os.path.exists(model_path):
+#         raise RuntimeError(f"piper_voice_missing:{model_path}")
+
+#     # 3) Gọi Piper đúng cờ: --model / --output_file
+#     #    Thử xuất WAV ra stdout trước ( --output_file - ), nếu fail thì dùng file tạm.
+#     try:
+#         p = subprocess.run(
+#             [bin_path, "--model", model_path, "--output_file", "-"],
+#             input=text.encode("utf-8"),
+#             capture_output=True,
+#             check=True
+#         )
+#         wav_bytes = p.stdout
+#         if not wav_bytes:
+#             raise RuntimeError("piper_no_audio_stdout")
+#         return _wav_bytes_to_mp3_b64(wav_bytes)
+#     except Exception as e1:
+#         # Thử lại với file WAV tạm (một số build Piper trên Windows ổn định hơn khi ghi file)
+#         tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+#         try:
+#             p2 = subprocess.run(
+#                 [bin_path, "--model", model_path, "--output_file", tmp_wav],
+#                 input=text.encode("utf-8"),
+#                 capture_output=True,
+#                 check=True
+#             )
+#             if not os.path.exists(tmp_wav) or os.path.getsize(tmp_wav) == 0:
+#                 raise RuntimeError(f"piper_no_audio_file rc={p2.returncode} stderr={p2.stderr.decode(errors='ignore')}")
+#             with open(tmp_wav, "rb") as f:
+#                 wav_bytes = f.read()
+#             return _wav_bytes_to_mp3_b64(wav_bytes)
+#         except Exception as e2:
+#             # Gộp lỗi cho dễ debug ở log phía trên
+#             raise RuntimeError(f"piper_run_failed: stdout_err={getattr(e1,'stderr',b'')!r} file_err={getattr(e2,'stderr',b'')!r}") 
+#         finally:
+#             _safe_remove(tmp_wav)
 
 # =========================
 # Alignment helpers (NEW)
@@ -389,12 +569,53 @@ def _debug_head(raw: bytes, label: str = "audio"):
 # =========================
 # TTS (gTTS)
 # =========================
+# def tts_synthesize(text: str, lang: Optional[str] = None) -> Tuple[str, str]:
+#     lang = (lang or "en").lower()
+#     try:
+#         tts = gTTS(text=text, lang=lang)
+#     except Exception:
+#         tts = gTTS(text=text, lang="en")
+#     tmp_path = None
+#     try:
+#         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+#             tmp_path = tmp.name
+#         tts.save(tmp_path)
+#         with open(tmp_path, "rb") as f:
+#             audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+#         return audio_b64, "audio/mpeg"
+#     finally:
+#         _safe_remove(tmp_path)
+
 def tts_synthesize(text: str, lang: Optional[str] = None) -> Tuple[str, str]:
-    lang = (lang or "en").lower()
+    """
+    ƯU TIÊN Piper, gTTS chỉ để fallback.
+    Nếu settings.PIPER_STRICT = True → Piper lỗi sẽ raise luôn, KHÔNG fallback.
+    """
+    lang_norm = (lang or "en").lower().strip()
+    STRICT_PIPER = getattr(settings, "PIPER_STRICT", False)
+
+    # ---- 1) Thử Piper trước ----
     try:
-        tts = gTTS(text=text, lang=lang)
+        b64 = _tts_piper_to_mp3_b64(text, lang_norm)
+        logger.info("[TTS] Piper OK (lang=%s)", lang_norm)
+        return b64, "audio/mpeg"
+    except Exception as e:
+        # Ghi log + quyết định có cho fallback hay không
+        logger.warning("[TTS] Piper FAILED (lang=%s): %r", lang_norm, e)
+        if STRICT_PIPER:
+            # Muốn debug Piper, đặt PIPER_STRICT=True trong settings -> thấy lỗi ngay trên API
+            raise
+
+    # ---- 2) Fallback gTTS (khi Piper không chạy được) ----
+    lang_fallback = lang_norm or "en"
+    try:
+        tts = gTTS(text=text, lang=lang_fallback)
+        logger.info("[TTS] Using gTTS(lang=%s) as fallback", lang_fallback)
     except Exception:
+        # Lang không hỗ trợ -> fallback EN
         tts = gTTS(text=text, lang="en")
+        logger.info("[TTS] Using gTTS(lang=en) after lang=%s failed", lang_fallback)
+
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
@@ -405,6 +626,7 @@ def tts_synthesize(text: str, lang: Optional[str] = None) -> Tuple[str, str]:
         return audio_b64, "audio/mpeg"
     finally:
         _safe_remove(tmp_path)
+
 
 # =========================
 # STT (base64 → text)

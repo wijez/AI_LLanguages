@@ -1,27 +1,27 @@
 from django.db import transaction
+from django.forms import FloatField
 from django.utils import timezone
 from rest_framework import viewsets, permissions, mixins
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
-from django.db.models import F, Prefetch, Count, Q
+from django.db.models import F, Avg, Case, Max, Prefetch, Count, Q, When
 
 from languages.models import (
-    Lesson, Skill, LanguageEnrollment, UserSkillStats,
+    Language, Lesson, RoleplayScenario, Skill, LanguageEnrollment, UserSkillStats,
     SkillQuestion, SkillChoice, ListeningPrompt, PronunciationPrompt,
     ReadingContent, ReadingQuestion, WritingQuestion, SkillGap,
     MatchingPair, OrderingItem, SpeakingPrompt, TopicProgress
 )
+from progress.models import DailyXP
 from .models import LessonSession, SessionAnswer
 from vocabulary.models import Mistake, LearningInteraction
 
 from languages.serializers import SkillSerializer
-from .serializers import (
-    LessonSessionOut, StartSessionIn, AnswerIn, CompleteSessionIn, CancelSessionIn
-)
+from .serializers import *
 import re
 import unicodedata
-from social.services import award_xp_from_lesson
+from social.services import award_xp_from_lesson, recalc_badges_for_user
 
 
 # ============ Utils for checking ============
@@ -485,6 +485,13 @@ class LessonSessionViewSet(mixins.RetrieveModelMixin,
             )
         else:
             award_result = {"ok": True, "awarded": False, "reason": "lesson_xp_zero"}
+        try:
+            recalc_badges_for_user(
+                request.user,
+                limit_types=["lessons_completed", "total_xp", "streak_days"],
+            )
+        except Exception as e:
+            print("[badges] recalc after lesson complete failed:", e)
         resp = LessonSessionOut(session).data
         resp["xp_award"] = award_result 
 
@@ -532,3 +539,216 @@ class LessonSessionViewSet(mixins.RetrieveModelMixin,
         )
 
         return Response(LessonSessionOut(session).data, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def practice_overview(request):
+    user = request.user
+    raw_lang = request.GET.get("language")
+    limit = int(request.GET.get("limit", 10))
+    now = timezone.now()
+
+    # --- 1. Resolve Enrollment ---
+    enr_qs = LanguageEnrollment.objects.select_related("language").filter(user=user)
+    if raw_lang:
+        lang_obj = Language.objects.filter(abbreviation=raw_lang).first()
+        if not lang_obj and raw_lang.isdigit():
+            lang_obj = Language.objects.filter(pk=int(raw_lang)).first()
+        
+        if lang_obj:
+            enr_qs = enr_qs.filter(language=lang_obj)
+
+    enrollment = enr_qs.first()
+    if not enrollment:
+        return Response({"detail": "Bạn chưa có Enrollment cho ngôn ngữ này."}, status=400)
+    
+    lang_obj = enrollment.language
+
+    # --- 2. XP Today / Goal ---
+    xp_today = DailyXP.objects.filter(
+        user=user, date=timezone.localdate()
+    ).values_list("xp", flat=True).first() or 0
+    daily_goal = getattr(enrollment, "daily_goal", 60) # daily_goal trên enrollment, nếu không thì lấy từ settings
+
+    # ----- 3. SRS due words (KnownWord) -----
+    due_words_qs = (
+        KnownWord.objects
+        .filter(enrollment=enrollment, next_review__lte=now)
+        .select_related("word")
+        .order_by("next_review")[:limit]
+    )
+
+    # ----- 4. Word suggestions -----
+    known_ids = KnownWord.objects.filter(enrollment=enrollment).values_list("word", flat=True)
+    words_qs = (
+        Word.objects.filter(language=lang_obj)
+        .exclude(id__in=known_ids)
+        .order_by("id")[:limit] # Hoặc order_by("?") để lấy ngẫu nhiên
+    )
+
+    # ----- 5. Common Mistakes -----
+    # Truy vấn 'source' và 'timestamp' từ model Mistake
+    # Đổi tên (alias) 'source' thành 'error_type' cho serializer
+
+    mistakes_raw = (
+        Mistake.objects
+        .filter(enrollment=enrollment)
+        .values("source", "word", "word__text")
+        .annotate(
+            times=Count("id"),
+            last_seen=Max("timestamp"),
+        )
+        .order_by("-times")[:limit]
+    )
+    mistakes_qs = []
+    for row in mistakes_raw:
+        mistakes_qs.append({
+            "word_id": row.get("word"),               # FK id
+            "word_text": row.get("word__text") or "", # text của từ
+            "error_type": row.get("source") or "",    # pronunciation/grammar/...
+            "times": row.get("times") or 0,
+            "last_seen": row.get("last_seen"),
+        })
+
+    # ----- 6. Weak skills -----
+    # Truy vấn 'skill__type' từ 'LearningInteraction' -> 'Skill'
+    # Đổi tên (alias) 'skill__type' thành 'skill_tag' cho serializer
+    weak_qs = (
+        LearningInteraction.objects.filter(enrollment=enrollment, skill__isnull=False, value__isnull=False)
+        .values(
+            skill_tag=F("skill__type")
+        )
+        .annotate(
+            accuracy=Avg("value")
+        )
+        .order_by("accuracy")[:5] # Lấy 5 kỹ năng yếu nhất
+    )
+
+    # ----- 7. Micro-lessons (In-progress sessions) -----
+    micro_qs = (
+        LessonSession.objects.filter(enrollment=enrollment)
+        .exclude(status="completed")
+        .select_related("lesson")
+        .order_by("-last_activity")[:limit]
+    )
+
+    # ----- 8. Roleplay (Speak/Listen) -----
+    scenarios_qs = (
+        RoleplayScenario.objects
+        .filter(is_active=True) # Nên có filter theo language nếu model RoleplayScenario có
+        .order_by("level", "order")[:limit]
+    )
+    # Nếu RoleplayScenario có trường language FK:
+    # scenarios_qs = RoleplayScenario.objects.filter(language=lang_obj, is_active=True)...
+
+    # ----- 9. Serialize Data -----
+    data = {
+        "enrollment": EnrollmentMiniSerializer(enrollment).data,
+        "xp_today": int(xp_today or 0),
+        "daily_goal": int(daily_goal or 0),
+        "srs_due_words": KnownWordDueSerializer(due_words_qs, many=True).data,
+        "word_suggestions": WordSuggestSerializer(words_qs, many=True).data,
+        "common_mistakes": MistakeAggSerializer(mistakes_qs, many=True).data,
+        "weak_skills": WeakSkillSerializer(weak_qs, many=True).data,
+        "micro_lessons": MicroLessonSerializer(micro_qs, many=True).data,
+        "speak_listen": RoleplayMiniSerializer(scenarios_qs, many=True).data,
+    }
+    
+    # Validate và trả về
+    return Response(PracticeOverviewSerializer(data).data)
+
+
+class SkillSessionViewSet(mixins.RetrieveModelMixin,
+                          mixins.ListModelMixin,
+                          viewsets.GenericViewSet):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = SkillSessionOut
+    queryset = SkillSession.objects.all()
+
+    def get_queryset(self):
+        return super().get_queryset().filter(user=self.request.user)
+
+    @action(detail=False, methods=["post"], url_path="start")
+    @transaction.atomic
+    def start(self, request):
+        """
+        Mở một phiên luyện theo Skill (không lệ thuộc Lesson).
+        Body: { "skill": <id>, "enrollment": <id>, "lesson": <optional id> }
+        Gate: enrollment phải thuộc user, và language phải khớp với skill.language_code.
+        """
+        s = SkillSessionStartIn(data=request.data)
+        s.is_valid(raise_exception=True)
+        skill = s.validated_data["skill"]
+        enrollment = s.validated_data["enrollment"]
+        lesson = s.validated_data.get("lesson")
+
+        if enrollment.user_id != request.user.id:
+            return Response({"detail": "Enrollment không thuộc user."}, status=403)
+
+        # Khớp ngôn ngữ: enrollment.language.abbreviation == skill.language_code
+        lang_abbr = getattr(enrollment.language, "abbreviation", "").lower()
+        if (skill.language_code or "").lower() != lang_abbr:
+            return Response({"detail": "Enrollment và Skill không cùng ngôn ngữ."}, status=400)
+
+        sess = SkillSession.objects.create(
+            user=request.user,
+            enrollment=enrollment,
+            skill=skill,
+            lesson=lesson,
+            status="in_progress",
+            meta={"source": "skill_session"},
+        )
+        return Response(SkillSessionOut(sess).data, status=201)
+
+    @action(detail=True, methods=["post"], url_path="complete")
+    @transaction.atomic
+    def complete(self, request, pk=None):
+        """
+        Chốt phiên kỹ năng, có thể nhận final_xp.
+        Body: { "final_xp": 10? }
+        """
+        ss: SkillSession = self.get_object()
+        if ss.status != "in_progress":
+            return Response({"detail": "Session không còn ở trạng thái in_progress."}, status=400)
+
+        final_xp = int(request.data.get("final_xp") or ss.xp_earned or 0)
+        ss._recalc_scores()
+        ss.mark_completed(final_xp=final_xp)
+
+        # cộng XP vào enrollment (giống LessonSession.complete_session)
+        if final_xp and final_xp > 0:
+            ss.enrollment.total_xp += final_xp
+            ss.enrollment.save(update_fields=["total_xp"])
+        try:
+            recalc_badges_for_user(
+                request.user,
+                limit_types=["speaking_sessions", "total_xp"],
+            )
+        except Exception as e:
+            print("[badges] recalc after skill session complete failed:", e)
+
+        return Response(SkillSessionOut(ss).data, status=200)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    @transaction.atomic
+    def cancel(self, request, pk=None):
+        ss: SkillSession = self.get_object()
+        if ss.status != "in_progress":
+            return Response({"detail": "Chỉ hủy khi session đang 'in_progress'."}, status=400)
+        as_failed = bool(request.data.get("as_failed") or False)
+        ss.status = "failed" if as_failed else "abandoned"
+        ss.completed_at = timezone.now()
+        if ss.started_at:
+            ss.duration_seconds = int((ss.completed_at - ss.started_at).total_seconds())
+        ss.save(update_fields=["status", "completed_at", "duration_seconds"])
+        return Response(SkillSessionOut(ss).data, status=200)
+
+    @action(detail=True, methods=["get"], url_path="attempts")
+    def attempts(self, request, pk=None):
+        """
+        Lấy danh sách PronAttempt của phiên kỹ năng.
+        """
+        ss: SkillSession = self.get_object()
+        qs = ss.attempts.order_by("-created_at")
+        return Response(PronAttemptOut(qs, many=True).data, status=200)

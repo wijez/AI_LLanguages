@@ -5,6 +5,7 @@ class TTSRequestSerializer(serializers.Serializer):
     text = serializers.CharField()
     lang = serializers.CharField(required=False, allow_blank=True)  # ví dụ: 'en', 'vi'
 
+
 class TTSResponseSerializer(serializers.Serializer):
     audio_base64 = serializers.CharField()
     mime_type = serializers.CharField(default="audio/mpeg")
@@ -38,3 +39,9 @@ class PronScoreAnySerializer(serializers.Serializer):
         if not attrs.get("target_text") and not attrs.get("expected_text"):
             raise serializers.ValidationError("Cần target_text hoặc expected_text.")
         return attrs
+
+
+class PronTTSSampleIn(serializers.Serializer):
+    prompt_id = serializers.IntegerField()
+    # L2 FE đang lưu trong localStorage.learn, vẫn cho gửi kèm:
+    lang = serializers.CharField(required=False, allow_blank=True)

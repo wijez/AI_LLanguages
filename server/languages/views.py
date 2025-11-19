@@ -26,6 +26,8 @@ from languages.services.roleplay_flow import ordered_blocks, split_prologue_and_
 from languages.services.ai_speaker import ai_lines_for
 from languages.services.session_mem import create_session, get_session, save_session
 from languages.services.validate_turn import score_user_turn, make_hint
+from rest_framework.filters import SearchFilter, OrderingFilter
+from django_filters.rest_framework import DjangoFilterBackend
 
 
 class LanguageViewSet(viewsets.ModelViewSet):
@@ -59,7 +61,7 @@ class LanguageEnrollmentViewSet(viewsets.ModelViewSet):
             or self.request.query_params.get("code")
         )
         if abbr: 
-            qs = qs.filter(language__abbreviation_iexact=abbr)
+            qs = qs.filter(language__abbreviation__iexact=abbr)
         
         lang_id = (
             self.request.query_params.get("language_id")
@@ -104,6 +106,14 @@ class LessonViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(topic__slug=t)
         return qs
 
+
+    """
+    gán skill vào 1 lesson
+    {
+        "skill_id": 123,
+        "order": 2
+    }
+    """
     @action(detail=True, methods=["post"], url_path="add-skill",
         permission_classes=[permissions.IsAuthenticated])
     def add_skill(self, request, pk=None):
@@ -118,16 +128,28 @@ class LessonViewSet(viewsets.ModelViewSet):
                 order = raw.pop("order", None)
 
                 # Tạo skill theo schema mới (nested fields):
-                ser = SkillSerializer(data=raw, context=self.get_serializer_context())
-                ser.is_valid(raise_exception=True)
-                skill = ser.save()
+                skill_id = raw.pop("skill_id", None)
+                if skill_id:
+                    skill = get_object_or_404(Skill, pk=skill_id)
+                else:
+                    # 2) Không có skill_id -> tạo mới skill
+                    ser = SkillSerializer(
+                        data=raw,
+                        context=self.get_serializer_context()
+                    )
+                    ser.is_valid(raise_exception=True)
+                    skill = ser.save()
 
                 # Tạo bản ghi nối và set order
                 if order is None:
                     current += 1
-                    order = current
-                LessonSkill.objects.create(lesson=lesson, skill=skill, order=order)
-
+                    order_local = current
+                else:
+                    order_local = order
+                LessonSkill.objects.create(lesson=lesson, skill=skill, order=order_local)
+                if not created and order is not None and ls.order != order_local:
+                    ls.order = order_local
+                    ls.save(update_fields=["order"])
                 out.append(SkillSerializer(skill, context=self.get_serializer_context()).data)
 
         return Response(out if many else out[0], status=status.HTTP_201_CREATED)
@@ -146,6 +168,129 @@ class LessonViewSet(viewsets.ModelViewSet):
               .annotate(ls_order=F('lessonskill__order'))
               .order_by('ls_order', 'id'))
         return Response(SkillSerializer(qs, many=True).data)
+    @action(detail=True, methods=["post"], url_path="attach-skill",
+            permission_classes=[permissions.IsAuthenticated])
+    @transaction.atomic
+    def attach_skill(self, request, pk=None):
+        """
+        GẮN skill đã tồn tại vào lesson.
+        Body:
+          - 1 skill: { "skill": 54, "order": 3? }
+          - nhiều skill:
+            [
+              { "skill": 54, "order": 3 },
+              { "skill": 58 },  # auto append cuối
+            ]
+        """
+        lesson = self.get_object()
+        many = isinstance(request.data, list)
+        items = request.data if many else [request.data]
+
+        out = []
+        # order hiện tại lớn nhất trong lesson
+        current = LessonSkill.objects.filter(lesson=lesson).aggregate(
+            m=Max("order")
+        )["m"] or 0
+
+        for raw in items:
+            skill_id = raw.get("skill") or raw.get("skill_id")
+            if not skill_id:
+                raise serializers.ValidationError(
+                    {"skill": "This field is required."}
+                )
+
+            try:
+                skill = Skill.objects.get(pk=skill_id)
+            except Skill.DoesNotExist:
+                raise serializers.ValidationError(
+                    {"skill": f"Skill {skill_id} not found."}
+                )
+
+            order = raw.get("order")
+            if order is None:
+                current += 1
+                order = current
+
+            # unique_together(lesson, skill) → dùng get_or_create
+            ls, created = LessonSkill.objects.get_or_create(
+                lesson=lesson,
+                skill=skill,
+                defaults={"order": order},
+            )
+            if not created and ls.order != order:
+                ls.order = order
+                ls.save(update_fields=["order"])
+
+            out.append(
+                {
+                    "lesson": lesson.id,
+                    "skill": skill.id,
+                    "order": ls.order,
+                    "created": created,
+                }
+            )
+
+        return Response(out if many else out[0], status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="reorder-skills",
+            permission_classes=[permissions.IsAuthenticated])
+    @transaction.atomic
+    def reorder_skills(self, request, pk=None):
+        """
+        CẬP NHẬT order của các skill trong 1 lesson.
+        Body:
+          {
+            "items": [
+              { "skill": 54, "order": 1 },
+              { "skill": 58, "order": 2 },
+              ...
+            ]
+          }
+        """
+        lesson = self.get_object()
+        items = request.data.get("items") or []
+        if not isinstance(items, list):
+            raise serializers.ValidationError(
+                {"items": "Must be a list of {skill, order}."}
+            )
+
+        for item in items:
+            skill_id = item.get("skill") or item.get("skill_id")
+            order = item.get("order")
+            if skill_id is None or order is None:
+                continue
+            LessonSkill.objects.filter(
+                lesson=lesson, skill_id=skill_id
+            ).update(order=order)
+
+        return Response({"detail": "ok"}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="remove-skill",
+            permission_classes=[permissions.IsAuthenticated])
+    @transaction.atomic
+    def remove_skill(self, request, pk=None):
+        """
+        GỠ skill khỏi lesson (không xóa Skill).
+        Body:
+          { "skill": 54 }
+        """
+        lesson = self.get_object()
+        skill_id = request.data.get("skill") or request.data.get("skill_id")
+        if not skill_id:
+            raise serializers.ValidationError(
+                {"skill": "This field is required."}
+            )
+
+        deleted, _ = LessonSkill.objects.filter(
+            lesson=lesson, skill_id=skill_id
+        ).delete()
+        return Response(
+            {
+                "detail": "removed" if deleted else "not_found",
+                "deleted": deleted,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class TopicViewSet(viewsets.ModelViewSet):
@@ -356,9 +501,14 @@ class SkillViewSet(mixins.ListModelMixin,
                    mixins.DestroyModelMixin,
                    mixins.RetrieveModelMixin,
                    viewsets.GenericViewSet):
-    permission_classes = [IsAdminOrSuperAdmin]
+    
     serializer_class = SkillSerializer
 
+    def get_permissions(self):
+        open_actions = {"list", "retrieve", "questions", "children"}
+        if getattr(self, "action", None) in open_actions or self.request.method in ("GET", "HEAD", "OPTIONS"):
+            return [AllowAny()]
+        return [IsAdminOrSuperAdmin()]
     def _base_queryset(self):
         """
         Queryset có đầy đủ prefetch để trả nested nhanh, tránh N+1.
@@ -394,10 +544,35 @@ class SkillViewSet(mixins.ListModelMixin,
 
     queryset = None  
 
+    # def get_queryset(self):
+    #     qs = self._base_queryset()
+
+    #     # ?topic= (id hoặc slug) qua M2M LessonSkill: lessons__topic__
+    #     t = self.request.query_params.get("topic")
+    #     if t:
+    #         if t.isdigit():
+    #             qs = qs.filter(lessons__topic_id=int(t))
+    #         else:
+    #             qs = qs.filter(lessons__topic__slug=t)
+    #         qs = qs.distinct()
+
+    #     # ?type=
+    #     ty = self.request.query_params.get("type")
+    #     if ty:
+    #         qs = qs.filter(type=ty)
+
+    #     # lọc theo lesson_id + sắp xếp theo LessonSkill.order
+    #     lesson = self.request.query_params.get("lesson")
+    #     if lesson:
+    #         qs = qs.filter(lessonskill__lesson_id=lesson) \
+    #             .annotate(ls_order=F("lessonskill__order")) \
+    #             .order_by("ls_order", "id")
+
+    #     return qs
     def get_queryset(self):
         qs = self._base_queryset()
 
-        # ?topic= (id hoặc slug) qua M2M LessonSkill: lessons__topic__
+        # ?topic=... (giữ nguyên)
         t = self.request.query_params.get("topic")
         if t:
             if t.isdigit():
@@ -406,12 +581,20 @@ class SkillViewSet(mixins.ListModelMixin,
                 qs = qs.filter(lessons__topic__slug=t)
             qs = qs.distinct()
 
-        # ?type=
+        # ?type=pron
         ty = self.request.query_params.get("type")
         if ty:
             qs = qs.filter(type=ty)
 
-        # lọc theo lesson_id + sắp xếp theo LessonSkill.order
+        # NEW: ?language=en | ?language_code=en | ?lang=en | ?code=en
+        lang = (self.request.query_params.get("language")
+                or self.request.query_params.get("language_code")
+                or self.request.query_params.get("lang")
+                or self.request.query_params.get("code"))
+        if lang:
+            qs = qs.filter(language_code__iexact=lang)
+
+        # ?lesson=... (giữ nguyên)
         lesson = self.request.query_params.get("lesson")
         if lesson:
             qs = qs.filter(lessonskill__lesson_id=lesson) \
@@ -865,6 +1048,13 @@ class RoleplayScenarioViewSet(viewsets.ModelViewSet):
     queryset = RoleplayScenario.objects.all().order_by("order","created_at")
     permission_classes = [IsAdminOrSuperAdmin]
 
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+
+    search_fields = ["title", "slug", "description"]
+
+    ordering_fields = ["order", "created_at", "updated_at", "level", "title"]
+    ordering = ["order", "created_at"] 
+
     def get_serializer_class(self):
         if self.action in ["create", "update", "partial_update"]:
             return RoleplayScenarioWriteSerializer
@@ -925,11 +1115,19 @@ class RoleplayBlockViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"], url_path="ask_gemini", permission_classes=[permissions.AllowAny])
     def ask(self, request):
         q = (request.data.get("query") or "").strip()
-        if not q: return Response({"detail":"query required"}, status=400)
-        sc = request.data.get("scenario"); k = int(request.data.get("top_k") or 8)
+        if not q: 
+            return Response({"detail":"query required"}, status=400)
+        if len(q) > 1000: 
+            return Response({"detail":"Query is too long."}, status=status.HTTP_400_BAD_REQUEST)
+        sc = request.data.get("scenario")
+        k = int(request.data.get("top_k") or 8)
+        if k > 20: 
+            k = 20
         blocks = retrieve_blocks(q_text=q, top_k=k, scenario_slug=sc)
+
+        answer = ask_gemini(q, blocks)
         return Response({
-          "answer": ask_gemini(q, blocks),
+          "answer":  answer,
           "context": RoleplayBlockReadSerializer(blocks, many=True).data
         })
 

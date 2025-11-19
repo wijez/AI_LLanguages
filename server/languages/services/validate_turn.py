@@ -1,7 +1,8 @@
-import re, math, unicodedata
+import re, math, unicodedata, hashlib
 from collections import Counter
 from difflib import SequenceMatcher
 from languages.services.ollama_client import embed_one
+from django.core.cache import cache
 
 # ==== patterns ====
 PHONE_RE = re.compile(r"\+?\d[\d\-\s]{6,}\d")
@@ -148,9 +149,13 @@ def score_user_turn(expected_text: str, expected_vec, user_text: str):
     lex, lex_dbg = _lexical_score(exp_norm, usr_norm)
 
     # semantic: embed cả 2 NORMALIZED strings
+    exp_norm_key = f"embed_cache:{hashlib.sha256(exp_norm.encode('utf-8')).hexdigest()}"
     evec_norm = embed_one(exp_norm)  # luôn embed lại để nhất quán chuẩn hoá
-    uvec      = embed_one(usr_norm)
+    if evec_norm is None:
+        evec_norm = embed_one(exp_norm) # Chỉ embed nếu không có trong cache
+        cache.set(exp_norm_key, evec_norm, timeout=3600*24)
 
+    uvec      = embed_one(usr_norm)
     cos1 = _cosine(uvec, evec_norm)
 
     # nếu DB có vec, cũng thử với vec đó rồi lấy max (tránh lệch cách embed cũ)

@@ -4,6 +4,9 @@ from users.models import (
     User, AccountSetting, AccountSwitch
 )
 from django.contrib.auth.password_validation import validate_password
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.exceptions import InvalidToken
+from django.core.exceptions import ValidationError
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -34,7 +37,20 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ("username", "email", "password", "avatar", "bio")
 
     def validate(self, attrs):
-        validate_password(attrs["password"])
+        username = (attrs.get("username") or "").strip()
+        email = (attrs.get("email") or "").strip()
+        password = attrs["password"] or ""
+
+        if User.objects.filter(username=username).exists():
+            raise serializers.ValidationError({"username": "Tên đăng nhập đã tồn tại."})
+
+        if email and User.objects.filter(email=email).exists():
+            raise serializers.ValidationError({"email": "Email đã được sử dụng."})
+        try:
+            validate_password(password)
+        except ValidationError as e:
+            raise serializers.ValidationError({"password": list(e.messages)})
+
         return attrs
         
     def create(self, validated_data):
@@ -49,16 +65,51 @@ class RegisterSerializer(serializers.ModelSerializer):
         return user
 
 
+# class LoginSerializer(serializers.Serializer):
+#     username = serializers.CharField()
+#     password = serializers.CharField(write_only=True)
+
+#     def validate(self, data):
+#         user = authenticate(username=data["username"], password=data["password"])
+#         if not user:
+#             raise serializers.ValidationError("Tên đăng nhập hoặc mật khẩu không chính xác.")
+#         if not user.is_active:
+#             raise serializers.ValidationError("Tài khoản của bạn chưa được xác thực. Vui lòng kiểm tra email.")
+#         data["user"] = user
+#         return data
+
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        user = authenticate(username=data["username"], password=data["password"])
+        login = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+
+        # Mặc định dùng đúng chuỗi người dùng nhập
+        username_for_auth = login
+
+        # Nếu người dùng nhập email -> map sang username để dùng authenticate mặc định
+        if "@" in login:
+            user_obj = User.objects.filter(email__iexact=login).first()
+            if user_obj:
+                username_for_auth = getattr(user_obj, User.USERNAME_FIELD, getattr(user_obj, "username", login))
+
+        # Thử đăng nhập
+        user = authenticate(username=username_for_auth, password=password)
+
+        # Fallback: nếu nhập username nhưng sai hoa/thường, thử tìm username case-insensitive
+        if not user and "@" not in login:
+            user_obj = User.objects.filter(username__iexact=login).first()
+            if user_obj:
+                user = authenticate(username=user_obj.username, password=password)
+
         if not user:
-            raise serializers.ValidationError("Invalid credentials")
+            raise serializers.ValidationError("Tên đăng nhập hoặc mật khẩu không chính xác.")
+
         if not user.is_active:
-            raise serializers.ValidationError("Account not verified")
+            raise serializers.ValidationError("Tài khoản của bạn chưa được xác thực. Vui lòng kiểm tra email.")
+
         data["user"] = user
         return data
 
@@ -97,6 +148,12 @@ class UserMeSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class UserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ("first_name", "last_name", "avatar", "bio")
+
+
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
     new_password = serializers.CharField(write_only=True)
@@ -113,3 +170,23 @@ class ChangePasswordSerializer(serializers.Serializer):
         user.set_password(self.validated_data["new_password"]) 
         user.save(update_fields=["password"])
         return user
+
+
+class CustomTokenRefreshSerializer(TokenRefreshSerializer):
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        
+        # Lấy JTI từ refresh token mà client gửi lên
+        refresh = self.token_class(attrs['refresh'])
+        jti = refresh.get('jti')
+        
+        try:
+            user = User.objects.get(id=refresh.get('user_id'))
+        except User.DoesNotExist:
+            raise InvalidToken("User không tồn tại")
+
+        # So sánh JTI của token với JTI đang "active" của user
+        if user.active_refresh_jti != jti:
+            raise InvalidToken("Phiên đăng nhập không hợp lệ. Tài khoản này đã được đăng nhập từ một thiết bị khác.")
+            
+        return data

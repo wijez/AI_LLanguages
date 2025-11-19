@@ -1,3 +1,6 @@
+from ntpath import basename
+from django.conf import settings
+from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
 from django.urls import path, include
 from users.views import *
@@ -6,8 +9,7 @@ from languages.views import *
 from progress.views import * 
 from vocabulary.views import * 
 from learning.views import * 
-from django.urls import re_path
-from social.consumers import LeaderboardConsumer
+
 
 router = DefaultRouter()
 
@@ -31,13 +33,14 @@ router.register(r'roleplay-session', RoleplaySessionViewSet, basename='roleplay-
 
 #Learning
 router.register(r'learning/sessions', LessonSessionViewSet, basename='learning-session')
+router.register(r'skill_sessions', SkillSessionViewSet, basename='skill-session')
+
 
 # Vocabulary
-router.register(r'audio-assets', AudioAssetViewSet, basename='audioasset')
+
 router.register(r'known-words', KnownWordViewSet, basename='knownword')
 router.register(r'translations', TranslationViewSet, basename='translation')
 router.register(r'words', WordViewSet, basename='word')
-router.register(r'word-relations', WordRelationViewSet, basename='wordrelation')
 router.register(r'mistake', MistakeViewSet, basename='mistake' )
 router.register('learning-interaction', LearningInteractionViewSet, basename='learninginteraction')
 
@@ -48,14 +51,15 @@ router.register(r'daily-xp', DailyXPViewSet)
 router.register(r'friends', FriendViewSet, basename='friend')
 router.register(r'calendar-events', CalendarEventViewSet, basename='calendarevent')
 router.register(r'leaderboard-entries', LeaderboardEntryViewSet, basename='leaderboardentry')
+router.register(r'badges', BadgeViewSet, basename='badge')
+router.register(r'my-badges', UserBadgeViewSet, basename='user-badge')
+router.register(r'notifications', NotificationViewSet, basename='notification')
 
 
 
 urlpatterns = router.urls + [
     path("export/chat_training.jsonl", export_chat_training, name="export_chat_training"),
     path('leaderboard', LeaderboardAllView.as_view()),
-]
+    path('practice/overview', practice_overview, name="practice-overview")
+] 
 
-websocket_urlpatterns = [
-    re_path(r"ws/leaderboard/$", LeaderboardConsumer.as_asgi()),
-]

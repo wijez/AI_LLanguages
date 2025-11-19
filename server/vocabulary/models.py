@@ -5,6 +5,7 @@ from users.models import User
 from django.utils import timezone
 
 
+
 class Word(models.Model):
     language = models.ForeignKey(Language, on_delete=models.CASCADE, related_name='words')
     text = models.CharField(max_length=200)
@@ -20,19 +21,6 @@ class Word(models.Model):
 
     def __str__(self):
         return self.text
-
-
-class WordRelation(models.Model):
-    word = models.ForeignKey(Word, on_delete=models.CASCADE, related_name='relations')
-    related = models.ForeignKey(Word, on_delete=models.CASCADE, related_name='+')
-    relation_type = models.CharField(max_length=50, blank=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=['word', 'related', 'relation_type'],
-                                    name='uq_wordrelation_word_related_type')
-        ]
-        indexes = [models.Index(fields=['relation_type'])]
 
 
 class KnownWord(models.Model):
@@ -154,19 +142,6 @@ class Translation(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['source_language', 'target_language'])]
-
-
-class AudioAsset(models.Model):
-    language = models.ForeignKey(Language, on_delete=models.CASCADE, related_name='audio_assets')
-    key = models.CharField(max_length=255)
-    url = models.URLField()
-    duration_ms = models.IntegerField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=['language', 'key'], name='uq_audioasset_language_key')
-        ]
 
 
 class LearningInteraction(models.Model):

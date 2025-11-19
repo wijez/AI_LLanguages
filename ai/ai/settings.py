@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 import os
 from pathlib import Path
+from celery.schedules import crontab
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -159,13 +160,20 @@ SPECTACULAR_SETTINGS = {
 
 }
 
-CELERY_BROKER_URL = "redis://localhost:6379/0"
-CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
+CELERY_BROKER_URL = "redis://localhost:6379/1"
+CELERY_RESULT_BACKEND = "redis://localhost:6379/1"
+CELERY_TIMEZONE = "Asia/Ho_Chi_Minh"
+CELERY_ENABLE_UTC = False
+
 CELERY_BEAT_SCHEDULE = {
-    "train-ai-model-every-2h": {
+    "train-ai-model-every-10m": {
         "task": "ai.tasks.train_ai_model_task",
-        "schedule": 60 * 1,  # mỗi 2h
-    }
+        "schedule": crontab(minute="*/10"),
+        "options": {
+            "queue": "ai",        # nếu bạn tách queue
+            "expires": 9 * 60,    # job quá hạn sau 9 phút (tránh dồn đống)
+        },
+    },
 }
 
 
@@ -179,7 +187,7 @@ RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "http://localhost:11435")
 RAG_OLLAMA_EMBED_MODEL = os.getenv("RAG_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
 
 
-BE_API_BASE_URL = "http://localhost:8000/"
+BE_API_BASE_URL = "https://d5e6478e8939.ngrok-free.app"
 BE_API_TOKEN="xxx"
 BE_API_KEY="YYY"
 
