@@ -33,7 +33,7 @@ urlpatterns = router.urls + [
     path("train", TrainView.as_view()),       
     path("ingest/snapshot", SnapshotIngestJWTView.as_view()), 
     path("generate-recs/", generation_view.GenerateRecommendationView.as_view(), name="generate-recs"),
-    path("token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
-    path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    # path("token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
+    # path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
 ]
 

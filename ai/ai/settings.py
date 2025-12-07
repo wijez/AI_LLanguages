@@ -24,7 +24,7 @@ load_dotenv(Path(r"D:\AI_LL\.env"), override=True)
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-gjg7jcmu1=)(a)v1zqxz0x-mi0xe(7yi%*sok_f0m*$k51+jld'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -135,6 +135,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        "ai_recommend.auth.authentication.BEJWTAuthentication",
         'rest_framework_simplejwt.authentication.JWTAuthentication',   
     ),
     'DEFAULT_PERMISSION_CLASSES': (
@@ -171,7 +172,7 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(minute="*/10"),
         "options": {
             "queue": "ai",        # nếu bạn tách queue
-            "expires": 9 * 60,    # job quá hạn sau 9 phút (tránh dồn đống)
+            "expires": 8 * 60,    # job quá hạn sau 9 phút (tránh dồn đống)
         },
     },
 }
@@ -187,22 +188,24 @@ RAG_OLLAMA_URL = os.getenv("RAG_OLLAMA_URL", "http://localhost:11435")
 RAG_OLLAMA_EMBED_MODEL = os.getenv("RAG_OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
 
 
-BE_API_BASE_URL = "https://d5e6478e8939.ngrok-free.app"
+# BE_API_BASE_URL = "https://a43ded5eef5d.ngrok-free.app"
+BE_API_BASE_URL = "http://localhost:8000"
 BE_API_TOKEN="xxx"
 BE_API_KEY="YYY"
 
-BE_JWT_USERNAME = os.getenv("BE_JWT_USERNAME", "test1")
-BE_JWT_PASSWORD = os.getenv("BE_JWT_PASSWORD", "string")
+BE_JWT_USERNAME = os.getenv("BE_JWT_USERNAME", "admin01")
+BE_JWT_PASSWORD = os.getenv("BE_JWT_PASSWORD", "string1234")
 BE_JWT_TOKEN_URL = os.getenv("BE_JWT_TOKEN_URL", "/api/users/login/")
 BE_JWT_REFRESH_URL = os.getenv("BE_JWT_REFRESH_URL", "/api/users/login/")
 
 
 from datetime import timedelta
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
-    # "ALGORITHM": "HS256",  # mặc định HS256
-    # "SIGNING_KEY": SECRET_KEY,  # mặc định dùng SECRET_KEY của Django
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),   
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),   
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
 }
 
 MINIO_ENDPOINT   = os.getenv("MINIO_ENDPOINT")

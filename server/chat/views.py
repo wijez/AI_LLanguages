@@ -1,4 +1,3 @@
-# views.py
 import json
 import asyncio
 from typing import Optional, List, Dict, Any
@@ -20,9 +19,7 @@ from .serializers import (
 )
 from .utils import simple_reply
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes, OpenApiExample
-
-# RAG (bản mới)
-from .rag.retriever import get_index  # ✅ thay cho Retriever.ensure()
+from .rag.retriever import get_index  
 from .services.llm import call_llm, stream_llm_sync, build_system_prompt
 
 
@@ -249,7 +246,7 @@ class ChatViewSet(viewsets.ViewSet):
             },
             "pron": {
                 # nếu force_pron thì expect_text sẽ là văn bản yêu cầu user đọc;
-                # nếu không, vẫn để reply_text như trước cho UI tự quyết.
+                # nếu không, vẫn để reply_text 
                 "expect_text": expect_for_pron or reply_text,
                 "force": bool(v.get("force_pron", False)),
                 "score_endpoint": "/api/speech/pron/score/",
@@ -305,7 +302,6 @@ class ChatViewSet(viewsets.ViewSet):
             last_n = 6
         history = _turns_to_history(conv, last_n=last_n)
 
-        # ---- RAG (bản mới) chuẩn bị trước để stream ra sớm
         rag_hits = []
         ctx = ""
         if bool(getattr(conv, "use_rag", False)):

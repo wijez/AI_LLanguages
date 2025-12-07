@@ -1,4 +1,3 @@
-# chat/rag/indexer.py
 from __future__ import annotations
 from typing import List, Dict, Tuple, Iterable
 import os, json, re
@@ -8,7 +7,7 @@ from django.conf import settings
 # ---- Embedding backend hook ----
 #   get_embedder() -> object có .embed_texts(list[str]) -> np.ndarray, .embed_query(str) -> np.ndarray
 try:
-    from .embedders import get_embedder  # chỉnh import path cho đúng module của bạn
+    from .embedders import get_embedder  
 except Exception:  # fallback: sẽ raise rõ ràng khi gọi build_index
     get_embedder = None
 

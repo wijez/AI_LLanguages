@@ -52,14 +52,13 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Nếu bạn gửi cookie/session hoặc dùng CSRF:
+# cookie/session hoặc dùng CSRF:
 CORS_ALLOW_CREDENTIALS = False
 CORS_ALLOW_HEADERS = [
     'authorization',
     'content-type',
     'ngrok-skip-browser-warning',
 ]
-# Thường không cần đổi, nhưng nếu cần Authorization header:
 
 # (Tuỳ chọn) Cho phép các method
 from corsheaders.defaults import default_headers
@@ -73,7 +72,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://ai-l-languages-fe.vercel.app",
     
 ]
-# Nếu dùng CSRF (SessionAuth), cần tin tưởng origin FE:
+#  CSRF (SessionAuth), cần tin tưởng origin FE:
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

@@ -1,4 +1,3 @@
-# chat/rag/embedders.py
 from typing import List
 import numpy as np, httpx
 from django.conf import settings

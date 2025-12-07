@@ -7,6 +7,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.ensemble import GradientBoostingClassifier
 import joblib
 from django.conf import settings
+import math 
 from django.utils import timezone
 import logging
 logger = logging.getLogger(__name__)
@@ -54,7 +55,6 @@ def _save_model_artifact(obj: dict, snapshot_id: str) -> str:
     return path
 
 def train_from_snapshot(snapshot_id: str, params: Dict[str,Any]) -> Dict[str,Any]:
-    # import tại đây để tránh vòng lặp
     from ..models import TrainingRun, AIModelVersion
 
     paths = _snapshot_paths(snapshot_id)
@@ -113,6 +113,10 @@ def train_from_snapshot(snapshot_id: str, params: Dict[str,Any]) -> Dict[str,Any
         z = model.decision_function(X_val)
         val_pred = 1 / (1 + np.exp(-z))
     auc = float(roc_auc_score(y_val, val_pred)) if y_val.nunique() > 1 else float("nan")
+    if isinstance(auc, float) and math.isnan(auc):
+        auc_for_db = None
+    else:
+        auc_for_db = auc
 
     payload = {"model": model, "features": feat_cols, "snapshot_id": snapshot_id, "metrics":{"val_auc": auc}}
     artifact_uri = _save_model_artifact(payload, snapshot_id)
@@ -135,10 +139,10 @@ def train_from_snapshot(snapshot_id: str, params: Dict[str,Any]) -> Dict[str,Any
         started_at=timezone.now(),
         finished_at=timezone.now(),
         status="succeeded",
-        parameters=params,                 # đúng field
-        dataset_snapshot=snapshot_id,      # đúng field
+        parameters=params,               
+        dataset_snapshot=snapshot_id,    
         metrics={
-            "val_auc": auc,
+            "val_auc": auc_for_db,
             "artifact_uri": artifact_uri,  # PredictView sẽ đọc từ đây
             "features": feat_cols,
             "model_version": real_version,

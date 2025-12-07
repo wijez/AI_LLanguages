@@ -1,4 +1,3 @@
-# ai/ai_recommend/viewsets/sync_data.py 
 import os
 import json, time, hashlib, traceback
 from rest_framework import status, permissions

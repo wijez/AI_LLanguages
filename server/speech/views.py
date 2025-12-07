@@ -123,6 +123,183 @@ class PronScoreAPIView(APIView):
         )
 
 
+# class PronScoreUpAPIView(APIView):
+#     permission_classes = [AllowAny]
+#     authentication_classes = []
+#     parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+#     @extend_schema(
+#         tags=["Speech"],
+#         summary="Pronunciation Scoring (file hoặc base64)",
+#         description=(
+#             "Gửi audio (file hoặc base64) + target_text/expected_text. "
+#             "Server dùng Whisper để nhận dạng và chấm phát âm (0..100) + điểm từng từ."
+#         ),
+#         request=PronScoreAnySerializer,
+#         responses={200: OpenApiResponse(
+#             response=PronScoreResponseSerializer,
+#             description="Kết quả chấm phát âm"
+#         )},
+#     )
+#     def post(self, request):
+#         s = PronScoreAnySerializer(data=request.data)
+#         s.is_valid(raise_exception=True)
+
+#         expected_text = (s.validated_data.get("target_text")
+#                          or s.validated_data.get("expected_text")
+#                          or "").strip()
+#         lang = s.validated_data.get("language_code") or s.validated_data.get("lang") or "en"
+
+#         raw_bytes = None
+#         src_from = None
+#         filename = None
+#         content_type = None
+
+#         if "audio" in request.FILES and request.FILES["audio"].size:
+#             f = request.FILES["audio"]
+#             filename = getattr(f, "name", None)
+#             content_type = getattr(f, "content_type", None)
+#             raw_bytes = f.read()
+#             src_from = "multipart"
+#         else:
+#             # Base64 JSON
+#             audio_b64 = s.validated_data.get("audio_base64")
+#             if audio_b64:
+#                 from .services import _b64_to_bytes_any
+#                 raw_bytes = _b64_to_bytes_any(audio_b64)
+#                 src_from = "base64"
+
+#         if not raw_bytes:
+#             return Response({"detail": "Missing audio (file or base64)."}, status=400)
+
+#         # Lưu bản thô để so sánh sau
+#         hexhash = hashlib.sha1(raw_bytes).hexdigest()[:12]
+#         # Nếu có content_type đoán đuôi; nếu không thì đoán bằng hàm trong services
+#         ext = None
+#         if content_type:
+#             ext = guess_extension(content_type) or ""
+#         if not ext or ext == ".ksh":  # guess_extension đôi khi trả .ksh với mime lạ
+#             from .services import _guess_audio_suffix
+#             ext = _guess_audio_suffix(raw_bytes)
+#         if not ext.startswith("."):
+#             ext = f".{ext}" if ext else ".bin"
+
+#         rel_path = f"tmp_upload/{hexhash}{ext}"
+#         default_storage.save(rel_path, ContentFile(raw_bytes))
+#         file_url = request.build_absolute_uri(f"{settings.MEDIA_URL}{rel_path}")
+
+#         # Gọi STT + Score
+#         try:
+#             # Dùng pipeline base64 hiện tại cho đồng nhất debug trong services
+#             audio_b64 = f"data:audio/unknown;base64,{base64.b64encode(raw_bytes).decode()}"
+#             # recognized_text, stt_dbg = stt_transcribe_with_debug(audio_b64, lang)
+#             out = simple_pron_score(audio_b64, expected_text, lang=lang)
+
+            
+#         except ValueError as e:
+#             return Response({"detail": str(e)}, status=400)
+#         except subprocess.CalledProcessError as e:
+#             return Response(
+#                 {"detail": "Failed to decode audio via ffmpeg", "stderr": getattr(e, 'stderr', '')},
+#                 status=400
+#             )
+#         except RuntimeError as e:
+#             # ví dụ "ffmpeg failed to decode audio"
+#             return Response({"detail": str(e)}, status=400)
+
+#         # Gắn block debug upload
+#         debug_upload = {
+#             "src": src_from,
+#             "filename": filename,
+#             "content_type": content_type,
+#             "bytes_len": len(raw_bytes),
+#             "head16": raw_bytes[:16].hex(),
+#             "saved_path": rel_path,
+#             "file_url": file_url,
+#         }
+#         # === GHI LỊCH SỬ PronAttempt (chỉ khi user đã xác thực) ===
+#         if request.user and request.user.is_authenticated:
+#             session_obj = None
+
+#             # 1) Ưu tiên: nhận skill_session (PK id, int) từ client
+#             raw_sid = request.data.get("skill_session")
+#             if raw_sid is not None:
+#                 try:
+#                     sid = int(str(raw_sid).strip())
+#                 except (ValueError, TypeError):
+#                     return Response({"detail": "skill_session phải là số nguyên (id)."}, status=400)
+
+#                 session_obj = SkillSession.objects.filter(id=sid, user=request.user).first()
+#                 if session_obj is None:
+#                     return Response({"detail": "Không tìm thấy phiên hoặc không thuộc bạn."}, status=404)
+
+#             # 2) Fallback: nếu không gửi skill_session, cho phép auto-create khi có skill_id + enrollment_id
+#             if session_obj is None:
+#                 skill_id = request.data.get("skill_id")
+#                 enrollment_id = request.data.get("enrollment_id")
+#                 lesson_id = request.data.get("lesson_id")  # optional
+
+#                 if skill_id and enrollment_id:
+#                     try:
+#                         skill = Skill.objects.get(pk=int(skill_id))
+#                         enrollment = LanguageEnrollment.objects.get(pk=int(enrollment_id), user=request.user)
+#                     except (ValueError, Skill.DoesNotExist, LanguageEnrollment.DoesNotExist):
+#                         return Response({"detail": "skill_id hoặc enrollment_id không hợp lệ."}, status=400)
+
+#                     # Kiểm tra cùng ngôn ngữ
+#                     lang_abbr = getattr(enrollment.language, "abbreviation", "").lower()
+#                     if (skill.language_code or "").lower() != lang_abbr:
+#                         return Response({"detail": "Enrollment và Skill không cùng ngôn ngữ."}, status=400)
+
+#                     session_obj = SkillSession.objects.create(
+#                         user=request.user,
+#                         enrollment=enrollment,
+#                         skill=skill,
+#                         lesson_id=int(lesson_id) if lesson_id else None,
+#                         status="in_progress",
+#                         meta={"source": "pron_up_autostart"},
+#                     )
+#                 else:
+#                     return Response(
+#                         {"detail": "Cần truyền skill_session (id) hoặc skill_id + enrollment_id để tạo mới."},
+#                         status=400,
+#                     )
+
+#             # 3) Ghi attempt
+#             prompt_obj = None
+#             prompt_id = request.data.get("prompt_id")
+#             if prompt_id:
+#                 try:
+#                     prompt_obj = PronunciationPrompt.objects.get(pk=int(prompt_id), skill=session_obj.skill)
+#                 except Exception:
+#                     prompt_obj = None
+
+#             PronAttempt.objects.create(
+#                 session=session_obj,
+#                 prompt_id=prompt_obj,
+#                 expected_text=expected_text,
+#                 # recognized=recognized_text,
+#                 score_overall=float(out["overall"]),
+#                 words=out["words"],
+#                 details=out["details"],
+#                 audio_path=rel_path,  # MEDIA relative path
+#             )
+
+#             # cập nhật stats nhanh cho session
+#             session_obj._recalc_scores()
+#             session_obj.last_activity = now()
+#             session_obj.save(update_fields=["attempts_count", "best_score", "avg_score", "last_activity"])
+#         # Trả kết quả + debug (ffmpeg/probe) từ cả STT & Score
+#         resp = {
+#             # "recognized": recognized_text,
+#             "score_overall": out["overall"],
+#             "words": out["words"],
+#             "details": out["details"],
+#             "debug_upload": debug_upload,
+#             # "debug_stt": stt_dbg,              
+#             "debug_score": out.get("debug"), 
+#         }
+#         return Response(resp, status=200)
 class PronScoreUpAPIView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -145,16 +322,23 @@ class PronScoreUpAPIView(APIView):
         s = PronScoreAnySerializer(data=request.data)
         s.is_valid(raise_exception=True)
 
-        expected_text = (s.validated_data.get("target_text")
-                         or s.validated_data.get("expected_text")
-                         or "").strip()
-        lang = s.validated_data.get("language_code") or s.validated_data.get("lang") or "en"
+        expected_text = (
+            s.validated_data.get("target_text")
+            or s.validated_data.get("expected_text")
+            or ""
+        ).strip()
+        lang = (
+            s.validated_data.get("language_code")
+            or s.validated_data.get("lang")
+            or "en"
+        )
 
         raw_bytes = None
         src_from = None
         filename = None
         content_type = None
 
+        # 1) Lấy raw_bytes từ file multipart hoặc base64 JSON
         if "audio" in request.FILES and request.FILES["audio"].size:
             f = request.FILES["audio"]
             filename = getattr(f, "name", None)
@@ -162,7 +346,6 @@ class PronScoreUpAPIView(APIView):
             raw_bytes = f.read()
             src_from = "multipart"
         else:
-            # Base64 JSON
             audio_b64 = s.validated_data.get("audio_base64")
             if audio_b64:
                 from .services import _b64_to_bytes_any
@@ -172,9 +355,9 @@ class PronScoreUpAPIView(APIView):
         if not raw_bytes:
             return Response({"detail": "Missing audio (file or base64)."}, status=400)
 
-        # Lưu bản thô để so sánh sau
+        # 2) Lưu bản thô vào MEDIA để debug / xem lại
         hexhash = hashlib.sha1(raw_bytes).hexdigest()[:12]
-        # Nếu có content_type đoán đuôi; nếu không thì đoán bằng hàm trong services
+
         ext = None
         if content_type:
             ext = guess_extension(content_type) or ""
@@ -188,26 +371,30 @@ class PronScoreUpAPIView(APIView):
         default_storage.save(rel_path, ContentFile(raw_bytes))
         file_url = request.build_absolute_uri(f"{settings.MEDIA_URL}{rel_path}")
 
-        # Gọi STT + Score
+        # 3) Gọi 1 pipeline duy nhất: Whisper + scoring
         try:
-            # Dùng pipeline base64 hiện tại cho đồng nhất debug trong services
+            # data URL để tái sử dụng pipeline có sẵn trong services
             audio_b64 = f"data:audio/unknown;base64,{base64.b64encode(raw_bytes).decode()}"
-            recognized_text, stt_dbg = stt_transcribe_with_debug(audio_b64, lang)
             out = simple_pron_score(audio_b64, expected_text, lang=lang)
 
-            
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
         except subprocess.CalledProcessError as e:
             return Response(
-                {"detail": "Failed to decode audio via ffmpeg", "stderr": getattr(e, 'stderr', '')},
-                status=400
+                {
+                    "detail": "Failed to decode audio via ffmpeg",
+                    "stderr": getattr(e, "stderr", ""),
+                },
+                status=400,
             )
         except RuntimeError as e:
             # ví dụ "ffmpeg failed to decode audio"
             return Response({"detail": str(e)}, status=400)
 
-        # Gắn block debug upload
+        # 4) Lấy recognized từ kết quả scoring (không gọi STT lần 2)
+        details = out.get("details") or {}
+        recognized_text = details.get("recognized", "")
+
         debug_upload = {
             "src": src_from,
             "filename": filename,
@@ -217,23 +404,32 @@ class PronScoreUpAPIView(APIView):
             "saved_path": rel_path,
             "file_url": file_url,
         }
-        # === GHI LỊCH SỬ PronAttempt (chỉ khi user đã xác thực) ===
+
+        # 5) Ghi lịch sử PronAttempt (chỉ khi user đã xác thực)
         if request.user and request.user.is_authenticated:
             session_obj = None
 
-            # 1) Ưu tiên: nhận skill_session (PK id, int) từ client
+            # 5.1) Ưu tiên: nhận skill_session (PK id, int) từ client
             raw_sid = request.data.get("skill_session")
             if raw_sid is not None:
                 try:
                     sid = int(str(raw_sid).strip())
                 except (ValueError, TypeError):
-                    return Response({"detail": "skill_session phải là số nguyên (id)."}, status=400)
+                    return Response(
+                        {"detail": "skill_session phải là số nguyên (id)."},
+                        status=400,
+                    )
 
-                session_obj = SkillSession.objects.filter(id=sid, user=request.user).first()
+                session_obj = SkillSession.objects.filter(
+                    id=sid, user=request.user
+                ).first()
                 if session_obj is None:
-                    return Response({"detail": "Không tìm thấy phiên hoặc không thuộc bạn."}, status=404)
+                    return Response(
+                        {"detail": "Không tìm thấy phiên hoặc không thuộc bạn."},
+                        status=404,
+                    )
 
-            # 2) Fallback: nếu không gửi skill_session, cho phép auto-create khi có skill_id + enrollment_id
+            # 5.2) Fallback: nếu không gửi skill_session, auto-create khi có skill_id + enrollment_id
             if session_obj is None:
                 skill_id = request.data.get("skill_id")
                 enrollment_id = request.data.get("enrollment_id")
@@ -242,14 +438,22 @@ class PronScoreUpAPIView(APIView):
                 if skill_id and enrollment_id:
                     try:
                         skill = Skill.objects.get(pk=int(skill_id))
-                        enrollment = LanguageEnrollment.objects.get(pk=int(enrollment_id), user=request.user)
+                        enrollment = LanguageEnrollment.objects.get(
+                            pk=int(enrollment_id), user=request.user
+                        )
                     except (ValueError, Skill.DoesNotExist, LanguageEnrollment.DoesNotExist):
-                        return Response({"detail": "skill_id hoặc enrollment_id không hợp lệ."}, status=400)
+                        return Response(
+                            {"detail": "skill_id hoặc enrollment_id không hợp lệ."},
+                            status=400,
+                        )
 
                     # Kiểm tra cùng ngôn ngữ
                     lang_abbr = getattr(enrollment.language, "abbreviation", "").lower()
                     if (skill.language_code or "").lower() != lang_abbr:
-                        return Response({"detail": "Enrollment và Skill không cùng ngôn ngữ."}, status=400)
+                        return Response(
+                            {"detail": "Enrollment và Skill không cùng ngôn ngữ."},
+                            status=400,
+                        )
 
                     session_obj = SkillSession.objects.create(
                         user=request.user,
@@ -261,16 +465,23 @@ class PronScoreUpAPIView(APIView):
                     )
                 else:
                     return Response(
-                        {"detail": "Cần truyền skill_session (id) hoặc skill_id + enrollment_id để tạo mới."},
+                        {
+                            "detail": (
+                                "Cần truyền skill_session (id) hoặc "
+                                "skill_id + enrollment_id để tạo mới."
+                            )
+                        },
                         status=400,
                     )
 
-            # 3) Ghi attempt
+            # 5.3) Ghi attempt
             prompt_obj = None
             prompt_id = request.data.get("prompt_id")
             if prompt_id:
                 try:
-                    prompt_obj = PronunciationPrompt.objects.get(pk=int(prompt_id), skill=session_obj.skill)
+                    prompt_obj = PronunciationPrompt.objects.get(
+                        pk=int(prompt_id), skill=session_obj.skill
+                    )
                 except Exception:
                     prompt_obj = None
 
@@ -281,23 +492,31 @@ class PronScoreUpAPIView(APIView):
                 recognized=recognized_text,
                 score_overall=float(out["overall"]),
                 words=out["words"],
-                details=out["details"],
+                details=details,
                 audio_path=rel_path,  # MEDIA relative path
             )
 
             # cập nhật stats nhanh cho session
             session_obj._recalc_scores()
             session_obj.last_activity = now()
-            session_obj.save(update_fields=["attempts_count", "best_score", "avg_score", "last_activity"])
-        # Trả kết quả + debug (ffmpeg/probe) từ cả STT & Score
+            session_obj.save(
+                update_fields=[
+                    "attempts_count",
+                    "best_score",
+                    "avg_score",
+                    "last_activity",
+                ]
+            )
+
+        # 6) Trả kết quả (1 pass Whisper) + debug
         resp = {
             "recognized": recognized_text,
             "score_overall": out["overall"],
             "words": out["words"],
-            "details": out["details"],
+            "details": details,
             "debug_upload": debug_upload,
-            "debug_stt": stt_dbg,              
-            "debug_score": out.get("debug"), 
+            # giữ debug_score; nếu simple_pron_score trả thêm debug nội bộ
+            "debug_score": out.get("debug"),
         }
         return Response(resp, status=200)
 

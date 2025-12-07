@@ -22,7 +22,7 @@ from vocabulary.models import Mistake, LearningInteraction
 from learning.models import LessonSession
 from languages.services.embed_pipeline import embed_blocks
 from languages.services.rag import retrieve_blocks, ask_gemini
-from languages.services.roleplay_flow import ordered_blocks, split_prologue_and_dialogue
+from languages.services.roleplay_flow import ordered_blocks, split_prologue_and_dialogue, practice_blocks
 from languages.services.ai_speaker import ai_lines_for
 from languages.services.session_mem import create_session, get_session, save_session
 from languages.services.validate_turn import score_user_turn, make_hint
@@ -320,7 +320,6 @@ class TopicViewSet(viewsets.ModelViewSet):
         return qs.order_by("order", "id")
 
     def get_serializer_class(self):
-        # DÙNG serializer khác cho action custom
         if getattr(self, "action", None) == "auto_generate_lessons":
             return AutoGenerateLessonsIn
         return super().get_serializer_class()
@@ -1258,4 +1257,76 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
             "next_ai": ai_lines_for(ai_batch, learner_role=learner_role),
             "await_user": next_await,
             "finished": idx >= len(dlg_ids),
+        })
+    @action(detail=False, methods=["post"], url_path="practice")
+    def practice(self, request):
+        """
+        Trả về các block luyện tập của kịch bản (không bao gồm phần hội thoại).
+
+        body: { "scenario": "<slug|uuid>" }
+        """
+        sc = request.data.get("scenario")
+        if not sc:
+            return Response({"detail": "scenario required"}, status=400)
+
+        scn = RoleplayScenario.objects.filter(slug=sc).first() \
+              or get_object_or_404(RoleplayScenario, id=sc)
+
+        blocks = practice_blocks(scn)
+
+        return Response({
+            "scenario": {
+                "id": str(scn.id),
+                "slug": scn.slug,
+                "title": scn.title,
+                "level": scn.level,
+            },
+            "blocks": [
+                {
+                    "id": str(b.id),
+                    "section": b.section,
+                    "order": b.order,
+                    "role": b.role or "-",
+                    "text": b.text,
+                    "extra": b.extra,
+                    "audio_key": b.audio_key,
+                    "tts_voice": b.tts_voice,
+                    "lang_hint": b.lang_hint,
+                }
+                for b in blocks
+            ],
+        })
+
+    @action(detail=False, methods=["post"], url_path="practice-gemini")
+    def practice_gemini(self, request):
+        """
+        Gọi Gemini để sinh đoạn hội thoại dựa trên các block luyện tập
+        (background, instruction, warmup, vocabulary) thay vì kịch bản dialogue.
+
+        body: { "scenario": "<slug|uuid>", "query": "<prompt>" }
+        """
+
+        sc = request.data.get("scenario")
+        query = (request.data.get("query") or "").strip()
+
+        if not sc:
+            return Response({"detail": "scenario required"}, status=400)
+        if not query:
+            return Response({"detail": "query required"}, status=400)
+
+        scn = RoleplayScenario.objects.filter(slug=sc).first() \
+              or get_object_or_404(RoleplayScenario, id=sc)
+
+        blocks = practice_blocks(scn)
+        answer = ask_gemini(query, blocks)
+
+        return Response({
+            "answer": answer,
+            "scenario": {
+                "id": str(scn.id),
+                "slug": scn.slug,
+                "title": scn.title,
+                "level": scn.level,
+            },
+            "context": RoleplayBlockReadSerializer(blocks, many=True).data,
         })

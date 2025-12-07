@@ -66,7 +66,6 @@ def generate_recommendations_for_user(
                 "needs_review": row.get("needs_review", False),
             }
     except Exception:
-        # fallback: nếu chưa có endpoint meta thì bỏ qua (điểm sẽ ít chính xác hơn)
         pass
 
     mis_by_skill, acc_map, problem_lesson = aggregate_from_be(mistakes, interactions)
