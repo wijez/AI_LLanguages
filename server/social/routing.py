@@ -1,6 +1,7 @@
-from django.urls import re_path
-from .consumers import LeaderboardConsumer
+from django.urls import path
+from .consumers import LeaderboardConsumer, NotificationConsumer
 
 websocket_urlpatterns = [
-    re_path(r"ws/leaderboard/$", LeaderboardConsumer.as_asgi()),
+    path(r"ws/leaderboard/", LeaderboardConsumer.as_asgi()),
+    path(r"ws/notifications/", NotificationConsumer.as_asgi()),
 ]

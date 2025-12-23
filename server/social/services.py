@@ -16,7 +16,6 @@ BADGE_TYPE_FRIENDS = "friend_count"
 BADGE_TYPE_TOTAL_XP = "total_xp"
 BADGE_TYPE_STREAK  = "streak_days"
 
-# Phát sự kiện để FE refetch ngay
 def _emit_leaderboard_changed(user_id: int):
     layer = get_channel_layer()
     if not layer:
@@ -38,7 +37,7 @@ def _emit_leaderboard_changed(user_id: int):
 def award_xp_from_lesson(*, user, source_id: str, amount: int):
     """Cộng XP cho user khi hoàn thành một lesson/session.
     Idempotent nhờ UniqueConstraint trên XPEvent.
-    source_id: khoá duy nhất đại diện cho lần hoàn thành (nên dùng session_id).
+    source_id: khoá duy nhất đại diện cho lần hoàn thành .
     """
     amount = int(amount or 0)
     if amount <= 0:
@@ -192,3 +191,14 @@ def recalc_badges_for_user(user, limit_types=None):
 
     return updated_ids
 
+
+def push_notification(notification):
+    from social.serializers import NotificationSerializer
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f"user_{notification.user_id}",
+        {
+            "type": "notify",
+            "data": NotificationSerializer(notification).data,
+        }
+    )

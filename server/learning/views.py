@@ -450,6 +450,8 @@ class LessonSessionViewSet(mixins.RetrieveModelMixin,
 
         # complete session (tự cộng XP vào enrollment + perfect bonus)
         session.complete_session(final_xp=final_xp)
+        # đánh dấu đã luyện tập hôm nay
+        session.enrollment.mark_practiced()
 
         # log complete_lesson
         LearningInteraction.objects.create(
@@ -715,6 +717,8 @@ class SkillSessionViewSet(mixins.RetrieveModelMixin,
         final_xp = int(request.data.get("final_xp") or ss.xp_earned or 0)
         ss._recalc_scores()
         ss.mark_completed(final_xp=final_xp)
+        # tính streak cho luyện skill rời
+        ss.enrollment.mark_practiced()
 
         # cộng XP vào enrollment (giống LessonSession.complete_session)
         if final_xp and final_xp > 0:

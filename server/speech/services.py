@@ -30,7 +30,7 @@ def get_model():
     global _model
     if _model is None:
         # chọn size phù hợp phần cứng: base/small/medium/large
-        _model = whisper.load_model("base")
+        _model = whisper.load_model("small")
     return _model
 
 # ở đầu file (thêm import)

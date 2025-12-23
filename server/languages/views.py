@@ -1,3 +1,4 @@
+from django.conf import time
 from django.db import transaction
 from rest_framework import viewsets, mixins, status, permissions
 from drf_spectacular.utils import (
@@ -12,6 +13,7 @@ from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 
 
+from speech.services_block_tts import generate_block_tts, generate_tts_from_text
 from utils.permissions import HasInternalApiKey, IsAdminOrSuperAdmin
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
@@ -21,7 +23,7 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 from vocabulary.models import Mistake, LearningInteraction
 from learning.models import LessonSession
 from languages.services.embed_pipeline import embed_blocks
-from languages.services.rag import retrieve_blocks, ask_gemini
+from languages.services.rag import ask_gemini_chat, retrieve_blocks, ask_gemini
 from languages.services.roleplay_flow import ordered_blocks, split_prologue_and_dialogue, practice_blocks
 from languages.services.ai_speaker import ai_lines_for
 from languages.services.session_mem import create_session, get_session, save_session
@@ -33,6 +35,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 class LanguageViewSet(viewsets.ModelViewSet):
     queryset = Language.objects.all()
     serializer_class = LanguageSerializer
+    filter_backends = [SearchFilter]
+    search_fields = ['name', 'abbreviation', 'native_name']
 
     def create(self, request, *args, **kwargs):
         is_many = isinstance(request.data, list)
@@ -297,6 +301,12 @@ class TopicViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminOrSuperAdmin]
     queryset = Topic.objects.select_related("language").all()
     serializer_class = TopicSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    
+    search_fields = ['title', 'slug', 'description']  
+    filterset_fields = ['language', 'golden', 'id']  
+    ordering_fields = ['order', 'created_at', 'title']
+    ordering = ['order', 'id']
 
     def get_permissions(self):
         if self.request.method in permissions.SAFE_METHODS:  # GET/HEAD/OPTIONS
@@ -381,7 +391,6 @@ class TopicViewSet(viewsets.ModelViewSet):
                     Lesson.objects.bulk_create(to_create)
                     created += len(to_create)
 
-        # trả response đúng schema
         out = AutoGenerateLessonsOut({"created": created, "topics": topics_count})
         return Response(out.data, status=status.HTTP_201_CREATED)
     @action(detail=False, methods=['get'], url_path='by-language', permission_classes=[permissions.IsAuthenticated])
@@ -416,13 +425,21 @@ class TopicViewSet(viewsets.ModelViewSet):
         page = self.paginate_queryset(qs)
         ser = self.get_serializer(page if page is not None else qs, many=True)
         return self.get_paginated_response(ser.data) if page is not None else Response(ser.data)
-    @action(detail=True, methods=['get'], url_path='lessons')
+  
+    @action(detail=True, methods=['get', 'post'], url_path='lessons')
     def lessons(self, request, pk=None):
         """
-        GET /api/topics/{id}/lessons/?include_skills=1&include_progress=1
-        - include_skills=1: trả kèm nested skills (đúng thứ tự trong lesson)
-        - include_progress=1: bồi progress (percent) + locked theo enrollment của user
+        GET: Lấy danh sách lesson (kèm progress/skills)
+        POST: Tạo lesson mới
         """
+        if request.method == 'POST':
+            topic = self.get_object()
+            serializer = LessonCreateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(topic=topic)
+            
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
         include_skills = str(request.query_params.get("include_skills", "0")).lower() in ("1","true","yes")
         include_progress = str(request.query_params.get("include_progress", "0")).lower() in ("1","true","yes")
 
@@ -430,70 +447,44 @@ class TopicViewSet(viewsets.ModelViewSet):
             .filter(topic_id=pk)
             .order_by("order", "id"))
 
-        # Prefetch skills theo thứ tự trong lesson (KHÔNG dùng OuterRef trong Prefetch)
         if include_skills:
             qs = qs.prefetch_related(
-                Prefetch(
-                    "skills",
-                    queryset=(
-                        Skill.objects
-                        .filter(is_active=True)
-                        .order_by("lessonskill__order", "id")
-                    )
-                )
+                Prefetch("skills", queryset=Skill.objects.filter(is_active=True).order_by("lessonskill__order", "id"))
             )
 
-        # --- Serialize base ---
         if include_skills:
             base = LessonWithSkillsSerializer(qs, many=True, context=self.get_serializer_context()).data
         else:
             base = LessonLiteSerializer(qs, many=True, context=self.get_serializer_context()).data
 
-        data = list(base)  # ép về list thường
+        data = list(base)
 
-        # --- Bồi progress/locked nếu được yêu cầu & user có enrollment ---
         if include_progress and request.user.is_authenticated:
-            topic = Topic.objects.select_related("language").get(pk=pk)
-            enrollment = LanguageEnrollment.objects.filter(
-                user_id=request.user.id,
-                language=topic.language
-            ).first()
+            try:
+                topic = Topic.objects.select_related("language").get(pk=pk)
+                enrollment = LanguageEnrollment.objects.filter(user_id=request.user.id, language=topic.language).first()
 
-            if enrollment:
-                # annotate tổng/đã hoàn thành skill (status ∈ completed/mastered)
-                qs_prog = qs.annotate(
-                    total_skills=Count("skills", filter=Q(skills__is_active=True), distinct=True),
-                    done_skills=Count(
-                        "skills",
-                        filter=Q(
-                            skills__userskillstats__enrollment_id=enrollment.id,
-                            skills__userskillstats__status__in=["completed", "mastered"],
-                        ),
-                        distinct=True,
-                    ),
-                )
-                meta = {}
-                for row in qs_prog:
-                    total = int(getattr(row, "total_skills", 0) or 0)
-                    done = int(getattr(row, "done_skills", 0) or 0)
-                    pct = int(round(done * 100 / total)) if total else 0
-                    meta[row.id] = {"total": total, "done": done, "percent": pct, "order": row.order}
-
-                tp = TopicProgress.objects.filter(enrollment=enrollment, topic_id=pk).first()
-                highest = tp.highest_completed_order if tp else 0
-                unlock_order = (highest or 0) + 1
-                REQUIRED = 80
-
-                for item in data:
-                    m = meta.get(item["id"], {"total": 0, "done": 0, "percent": 0, "order": 0})
-                    item["progress"] = {"total": m["total"], "done": m["done"], "percent": m["percent"]}
-                    item["required_pct"] = REQUIRED
-                    ord_ = item.get("order") or m["order"] or 0
-                    item["locked"] = not (ord_ <= unlock_order)
+                if enrollment:
+                    qs_prog = qs.annotate(
+                        total_skills=Count("skills", filter=Q(skills__is_active=True), distinct=True),
+                        done_skills=Count("skills", filter=Q(skills__userskillstats__enrollment_id=enrollment.id, skills__userskillstats__status__in=["completed", "mastered"]), distinct=True),
+                    )
+                    meta = {row.id: {"total": row.total_skills or 0, "done": row.done_skills or 0, "order": row.order} for row in qs_prog}
+                    
+                    tp = TopicProgress.objects.filter(enrollment=enrollment, topic_id=pk).first()
+                    unlock_order = (tp.highest_completed_order if tp else 0) + 1
+                    
+                    for item in data:
+                        m = meta.get(item["id"], {"total": 0, "done": 0, "order": 0})
+                        pct = int(round(m["done"] * 100 / m["total"])) if m["total"] else 0
+                        item["progress"] = {"total": m["total"], "done": m["done"], "percent": pct}
+                        item["locked"] = not ((item.get("order") or m["order"] or 0) <= unlock_order)
+            except Exception:
+                pass
 
         return Response(data)
 
-# ---- SỬA LẠI CHO B2: Skill không còn topic/order; filter theo lessons__topic ----
+
 class SkillViewSet(mixins.ListModelMixin,
                    mixins.CreateModelMixin,
                    mixins.UpdateModelMixin,
@@ -585,7 +576,7 @@ class SkillViewSet(mixins.ListModelMixin,
         if ty:
             qs = qs.filter(type=ty)
 
-        # NEW: ?language=en | ?language_code=en | ?lang=en | ?code=en
+        #  ?language=en | ?language_code=en | ?lang=en | ?code=en
         lang = (self.request.query_params.get("language")
                 or self.request.query_params.get("language_code")
                 or self.request.query_params.get("lang")
@@ -593,7 +584,7 @@ class SkillViewSet(mixins.ListModelMixin,
         if lang:
             qs = qs.filter(language_code__iexact=lang)
 
-        # ?lesson=... (giữ nguyên)
+        # ?lesson=... 
         lesson = self.request.query_params.get("lesson")
         if lesson:
             qs = qs.filter(lessonskill__lesson_id=lesson) \
@@ -617,7 +608,7 @@ class SkillViewSet(mixins.ListModelMixin,
         with transaction.atomic():
             skill = serializer.save()
 
-            # Gắn vào LessonSkill nếu gửi lesson_id
+            # Gắn vào LessonSkill  lesson_id
             if lesson_id is not None:
                 try:
                     lesson = Lesson.objects.get(pk=lesson_id)
@@ -781,7 +772,6 @@ def export_learning_data(request):
     return Response({"enrollments": serializer.data})
 
 
-# ---- SỬA LẠI CHO B2: export_chat_training không còn l.skill/topic → duyệt từng skill ----
 @api_view(["GET"])
 def export_chat_training(request):
     """
@@ -1097,6 +1087,39 @@ class RoleplayBlockViewSet(viewsets.ModelViewSet):
             return RoleplayBlockWriteSerializer
         return RoleplayBlockReadSerializer
 
+    def perform_create(self, serializer):
+        block = serializer.save()
+        self._ensure_tts(block)
+        try:
+            embed_blocks([block], force=True)
+        except Exception as e:
+            print(f"[EMBED ERROR] Could not embed block {block.id}: {e}")
+
+    def perform_update(self, serializer):
+        block = serializer.save()
+        self._ensure_tts(block)
+        if "text" in self.request.data:
+            try:
+                embed_blocks([block], force=True)
+            except Exception as e:
+                print(f"[EMBED ERROR] Could not re-embed block {block.id}: {e}")
+
+    def _ensure_tts(self, block):
+        """
+        Tạo hoặc cập nhật audio_key nếu cần
+        """
+        try:
+            # chỉ tạo nếu chưa có hoặc text thay đổi
+            if not block.audio_key or "text" in self.request.data:
+                audio_url = generate_block_tts(block)
+                if audio_url:
+                    block.audio_key = audio_url
+                    block.save(update_fields=["audio_key"])
+        except Exception as e:
+            # không block việc save block
+            print("[TTS BLOCK ERROR]", e)
+
+
     @action(detail=False, methods=["post"], url_path="embed", permission_classes=[IsAdminOrSuperAdmin])
     def embed_all(self, request):
         n = embed_blocks(force=bool(request.data.get("force")))
@@ -1177,7 +1200,7 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
         return Response({
             "session_id": sid,
             "prologue": [
-                {"role": b.role or "-", "text": b.text, "section": b.section, "order": b.order}
+                {"role": b.role or "-", "text": b.text, "section": b.section,"audio_key": b.audio_key, "order": b.order}
                 for b in prologue
             ],
             "ai_utterances": ai_lines_for(ai_batch, learner_role=role),
@@ -1247,6 +1270,7 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
                 "role": learner_role,
                 "order": nb.order,
                 "expected_text": nb.text,
+                "audio_key": nb.audio_key,
                 "expected_hint": make_hint(nb.text, 80),
             }
 
@@ -1329,4 +1353,125 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
                 "level": scn.level,
             },
             "context": RoleplayBlockReadSerializer(blocks, many=True).data,
+        })
+    @action(detail=False, methods=["post"], url_path="start-practice")
+    def start_practice(self, request):
+        serializer = PracticeStartIn(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sc_slug = serializer.validated_data["scenario"]
+        role = serializer.validated_data["role"]
+
+        scn = RoleplayScenario.objects.filter(slug=sc_slug).first() \
+              or get_object_or_404(RoleplayScenario, id=sc_slug)
+        
+        # 1. Tách Block:
+        # - Context Blocks: Background, Instruction, Vocabulary... (để làm system prompt)
+        # - Warmup Block: Để làm câu chào đầu tiên của AI
+        all_blocks = RoleplayBlock.objects.filter(scenario=scn).exclude(section="dialogue").order_by("order")
+        
+        context_blocks = []
+        warmup_block = None
+
+        for b in all_blocks:
+            if b.section == 'warmup':
+                warmup_block = b # Lấy warmup cuối cùng hoặc đầu tiên tùy logic, ở đây lấy cái tìm thấy
+            else:
+                context_blocks.append(b)
+
+        # 2. Xây dựng System Prompt (CHỈ dùng context_blocks)
+        sys_ctx = f"Scenario: {scn.title}\nLevel: {scn.level}\n"
+        for b in context_blocks:
+            sys_ctx += f"[{b.section.upper()}]: {b.text}\n"
+        
+        sys_ctx += (
+            f"\nINSTRUCTION:\n"
+            f"- You are roleplaying with a user. The user plays '{role}'.\n"
+            f"- You play the other role(s).\n"
+            f"- Respond naturally in spoken English. Keep it concise (1-3 sentences).\n"
+            f"- Do NOT prefix your response with a role name."
+        )
+
+        # 3. Chuẩn bị History & Greeting
+        history = []
+        ai_greeting_data = None
+
+        # Nếu có Warmup -> Đưa vào lịch sử coi như AI đã nói
+        if warmup_block:
+            history.append({"role": "model", "parts": [warmup_block.text]})
+            # Data để trả về FE phát luôn
+            ai_greeting_data = {
+                "text": warmup_block.text,
+                "audio_key": warmup_block.audio_key, # Warmup thường có sẵn audio trong DB
+                "role": "assistant" 
+            }
+        else:
+            # Nếu không có Warmup -> AI im lặng chờ User nói trước, hoặc tự sinh câu chào (tuỳ chọn)
+            pass
+
+        # 4. Tạo Session
+        sid = str(uuid.uuid4())
+        sess_data = {
+            "mode": "practice",
+            "scenario_id": str(scn.id),
+            "user_role": role,
+            "system_context": sys_ctx,
+            "history": history, # History đã chứa Warmup (nếu có)
+            "created_at": int(time.time()),
+        }
+        save_session(sid, sess_data)
+
+        # 5. Trả về
+        # prologue: Chỉ chứa thông tin tĩnh để hiển thị context
+        prologue_data = [RoleplayBlockReadSerializer(b).data for b in context_blocks]
+        
+        return Response({
+            "session_id": sid,
+            "prologue": prologue_data,
+            "ai_greeting": ai_greeting_data, 
+            "message": "Session started."
+        })
+
+    @action(detail=False, methods=["post"], url_path="submit-practice")
+    def submit_practice(self, request):
+        serializer = PracticeSubmitIn(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sid = serializer.validated_data["session_id"]
+        transcript = serializer.validated_data["transcript"]
+
+        sess = get_session(sid)
+        if not sess or sess.get("mode") != "practice":
+            return Response({"detail": "Invalid session"}, status=400)
+
+        history = sess.get("history", [])
+        sys_ctx = sess.get("system_context", "")
+        
+        # 1. Gọi Gemini (nhận về Dict)
+        ai_data = ask_gemini_chat(sys_ctx, history, transcript)
+        
+        ai_reply = ai_data.get("reply", "") or "..."
+        correction = ai_data.get("corrected")
+        explanation = ai_data.get("explanation")
+
+        # 2. Update History
+        # Lưu ý: Chỉ lưu phần hội thoại chính vào history để ngữ cảnh các vòng sau không bị rối bởi phần sửa lỗi
+        history.append({"role": "user", "parts": [transcript]})
+        history.append({"role": "model", "parts": [ai_reply]})
+        sess["history"] = history
+        save_session(sid, sess)
+
+        # 3. Sinh Audio cho câu Reply
+        ai_audio = generate_tts_from_text(ai_reply, lang="en")
+
+        # 4. Trả về Response kèm thông tin giáo dục
+        return Response({
+            "user_transcript": transcript,
+            "ai_text": ai_reply,
+            "ai_audio": ai_audio,
+            # Data sửa lỗi
+            "feedback": {
+                "has_error": bool(correction),
+                "original": transcript,
+                "corrected": correction,
+                "explanation": explanation
+            }
         })

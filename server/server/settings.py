@@ -29,14 +29,11 @@ if load_dotenv:
     except Exception:
         pass
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
-
 LOGGING = DJANGO_LOGGING
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
 
-DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
+DEBUG = True
 
 allowed_hosts_env = os.getenv('DJANGO_ALLOWED_HOSTS')
 ALLOWED_HOSTS = allowed_hosts_env.split(',') if allowed_hosts_env else []
@@ -52,7 +49,7 @@ DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-# cookie/session hoặc dùng CSRF:
+
 CORS_ALLOW_CREDENTIALS = False
 CORS_ALLOW_HEADERS = [
     'authorization',
@@ -148,46 +145,37 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'server.wsgi.application'
 
-
-# Database
-# https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-
-
-# DATABASES = {
-#     "default": {
-#         "ENGINE": "django.db.backends.postgresql",
-#         "NAME": os.getenv("DB_NAME", "learning_language"),
-#         "USER": os.getenv("DB_USER", "postgres"),
-#         "PASSWORD": os.getenv("DB_PASSWORD", "portgasDace"),
-#         "HOST": "localhost",
-#         "PORT": "5555",
-#         "CONN_MAX_AGE": 60,
-#     }
-# }
 DATABASES = {
      'default': {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'be_db',
         'USER': 'postgres',
         'PASSWORD': 'portgasDace',
-        'HOST': '127.0.0.1',   # kết nối ra container
+        'HOST': '127.0.0.1', 
         'PORT': '5543',    
     }
 }
 
-
-# ========== CELERY SETTINGS ==========
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB   = os.getenv("REDIS_DB", "0")
 REDIS_URL  = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
 
-# ===== Celery =====
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)         # redis://localhost:6379/0
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL) # redis://localhost:6379/0
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh' 
+USE_TZ = True 
+CELERY_BEAT_SCHEDULE = {
+    'update-daily-leaderboard-every-30-mins': {
+        'task': 'social.update_daily_leaderboard',
+        'schedule': crontab(minute='*/3'),  # Chạy mỗi 30 phút
+    },
+}     
 
-# ===== Channels (WebSocket) =====
 ASGI_APPLICATION = "server.asgi.application"
 CHANNEL_LAYERS = {
     "default": {
@@ -198,20 +186,6 @@ CHANNEL_LAYERS = {
     }
 }
 
-# Chấp nhận nội dung JSON
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-
-# Múi giờ
-CELERY_TIMEZONE = 'Asia/Ho_Chi_Minh' # Sửa lại cho đúng múi giờ của bạn
-USE_TZ = True # Đảm bảo Django cũng dùng timezone
-CELERY_BEAT_SCHEDULE = {
-    'update-daily-leaderboard-every-30-mins': {
-        'task': 'social.update_daily_leaderboard',
-        'schedule': crontab(minute='*/3'),  # Chạy mỗi 30 phút
-    },
-}       
 
 
 # Password validation
@@ -255,7 +229,6 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Django REST framework configuration
 REST_FRAMEWORK = {
     # Auth
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -309,7 +282,7 @@ def assign_tag_from_second_segment(result, generator, request, public):
         # GHI ĐÈ tag cho tất cả method hợp lệ
         for method, op in methods.items():
             if method.lower() in ("get", "post", "put", "patch", "delete", "options", "head"):
-                op["tags"] = [seg]  # giữ nguyên kebab-case
+                op["tags"] = [seg] 
     return result
 
 
@@ -349,7 +322,6 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
 INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "") 
 
-# ==== TTS ====
 PIPER_BIN = os.environ.get("PIPER_BIN", "piper") 
 PIPER_TMP_DIR = r"D:\AI_LL\tmp"
 PIPER_VOICE_DIR = os.environ.get("PIPER_VOICE_DIR", os.path.join(BASE_DIR, "voices"))

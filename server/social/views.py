@@ -1,8 +1,10 @@
 from django.shortcuts import render
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from languages.models import LanguageEnrollment
+from utils.permissions import CanMarkOwnNotificationRead, IsAdminOrSuperAdmin
 from utils.send_mail import send_user_email
 from social.serializers import *
 from social.models import (
@@ -16,6 +18,7 @@ from rest_framework.views import APIView
 from users.models import User
 from social.services import recalc_badges_for_user
 import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -93,6 +96,7 @@ class FriendViewSet(viewsets.ModelViewSet):
 class CalendarEventViewSet(viewsets.ModelViewSet):
     queryset = CalendarEvent.objects.all()
     serializer_class = CalendarEventSerializer
+    
 
 
 class LeaderboardEntryViewSet(viewsets.ModelViewSet):
@@ -189,6 +193,70 @@ class UserBadgeViewSet(viewsets.ModelViewSet):
 
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        if self.action == "mark_read":
+            return [IsAuthenticated(), CanMarkOwnNotificationRead()]
+        return [IsAuthenticated(), IsAdminOrSuperAdmin()]
+
     def get_queryset(self):
-        return Notification.objects.filter(user=self.request.user)
+        user = self.request.user
+        if user.is_staff or user.is_superuser:
+            # admin có thể xem tất cả
+            return Notification.objects.all().order_by("-created_at")
+        # user chỉ xem thông báo của chính họ
+        return Notification.objects.filter(user=user).order_by("-created_at")
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        if isinstance(instance, list):
+            data = NotificationSerializer(instance, many=True).data
+            return Response(data, status=status.HTTP_201_CREATED)
+        data = NotificationSerializer(instance).data
+        return Response(data, status=status.HTTP_201_CREATED)
+    
+    @action(
+    detail=True,
+    methods=["patch"],
+    url_path="read"
+    )
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+
+        if notification.read_at:
+            return Response({"status": "already_read"})
+
+        notification.read_at = timezone.now()
+        notification.save(update_fields=["read_at"])
+
+        return Response({
+            "status": "ok",
+            "id": notification.id,
+            "read_at": notification.read_at,
+        })
+    @action(
+    detail=False,
+    methods=["patch"],
+    url_path="read-all",
+    permission_classes=[IsAuthenticated],
+    )
+    def mark_all_read(self, request):
+        user = request.user
+
+        qs = Notification.objects.filter(
+            user=user,
+            read_at__isnull=True
+        )
+
+        updated_count = qs.update(read_at=timezone.now())
+
+        return Response(
+            {
+                "status": "ok",
+                "marked": updated_count,
+            },
+            status=status.HTTP_200_OK,
+        )

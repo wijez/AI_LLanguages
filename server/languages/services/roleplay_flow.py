@@ -1,7 +1,7 @@
 from languages.models import RoleplayScenario, RoleplayBlock
 
 ORDER_PRIORITY = {"background":1, "instruction":2, "dialogue":3, "warmup":4, "vocabulary":5}
-PRACTICE_SECTIONS = ("background", "instruction", "warmup", "vocabulary")
+PRACTICE_SECTIONS = {"background": 1, "instruction":2, "warmup":3, "vocabulary":4}
 
 def ordered_blocks(scn):
     blks = list(scn.blocks.all())

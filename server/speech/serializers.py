@@ -45,3 +45,8 @@ class PronTTSSampleIn(serializers.Serializer):
     prompt_id = serializers.IntegerField()
     # L2 FE đang lưu trong localStorage.learn, vẫn cho gửi kèm:
     lang = serializers.CharField(required=False, allow_blank=True)
+
+
+class SpeechSTTInputSerializer(serializers.Serializer):
+    audio_base64 = serializers.CharField(required=False, allow_blank=True, help_text="Chuỗi Base64 của file audio (webm/mp3/wav)")
+    language_code = serializers.CharField(default="en", required=False, help_text="Mã ngôn ngữ (en, vi...)")

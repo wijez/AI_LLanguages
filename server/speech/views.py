@@ -1,6 +1,7 @@
 import os
 import subprocess
 from django.db.models.base import transaction
+from drf_spectacular.types import OpenApiTypes
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
@@ -22,7 +23,7 @@ from learning.models import PronAttempt, SkillSession
 from .serializers import (
     TTSRequestSerializer, TTSResponseSerializer,
     PronScoreRequestSerializer, PronScoreResponseSerializer,
-    PronScoreAnySerializer, PronTTSSampleIn
+    PronScoreAnySerializer, PronTTSSampleIn, SpeechSTTInputSerializer
 )
 from drf_spectacular.utils import (
     extend_schema, OpenApiExample, OpenApiResponse
@@ -628,3 +629,61 @@ class PronunciationTTSSampleView(APIView):
             "duration": duration,
             "provider": "piper",
         })
+
+class SpeechToTextView(APIView):
+    """
+    API chuyên dụng cho Practice Mode:
+    Chỉ thực hiện Speech-to-Text (STT), không chấm điểm phát âm.
+    Input: Audio file hoặc Base64.
+    Output: { "text": "..." }
+    """
+    permission_classes = [AllowAny]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    @extend_schema(
+        tags=["Speech"],
+        summary="Simple Speech-to-Text (STT)",
+        description="Chuyển đổi giọng nói thành văn bản (Dùng cho Practice Mode).",
+        request=SpeechSTTInputSerializer,
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def post(self, request):
+        s = SpeechSTTInputSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+
+        lang = s.validated_data.get("language_code") or "en"
+        
+        # 1. Xử lý input Audio (Multipart File hoặc Base64)
+        raw_bytes = None
+        
+        # A. Check Multipart
+        if "audio" in request.FILES and request.FILES["audio"].size:
+            f = request.FILES["audio"]
+            raw_bytes = f.read()
+        # B. Check Base64
+        else:
+            audio_b64_raw = s.validated_data.get("audio_base64")
+            if audio_b64_raw:
+                from .services import _b64_to_bytes_any
+                raw_bytes = _b64_to_bytes_any(audio_b64_raw)
+
+        if not raw_bytes:
+            return Response({"detail": "Missing audio (file or base64)."}, status=400)
+
+        # 2. Chuẩn bị định dạng cho service stt_transcribe
+        # stt_transcribe thường nhận Data URI (data:audio/...) hoặc path
+        try:
+            # Convert ngược lại thành chuẩn Data URI để tái sử dụng service hiện có
+            b64_str = base64.b64encode(raw_bytes).decode('utf-8')
+            audio_data_uri = f"data:audio/unknown;base64,{b64_str}"
+            
+            # Gọi service STT (Whisper/Google...)
+            recognized_text = stt_transcribe(audio_data_uri, lang) or ""
+            
+            return Response({
+                "text": recognized_text,
+                "recognized": recognized_text 
+            }, status=200)
+
+        except Exception as e:
+            return Response({"detail": str(e)}, status=400)

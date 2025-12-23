@@ -47,6 +47,7 @@ router.register('learning-interaction', LearningInteractionViewSet, basename='le
 #Progress 
 router.register(r'daily-xp', DailyXPViewSet)
 
+
 #Social 
 router.register(r'friends', FriendViewSet, basename='friend')
 router.register(r'calendar-events', CalendarEventViewSet, basename='calendarevent')
@@ -60,6 +61,7 @@ router.register(r'notifications', NotificationViewSet, basename='notification')
 urlpatterns = router.urls + [
     path("export/chat_training.jsonl", export_chat_training, name="export_chat_training"),
     path('leaderboard', LeaderboardAllView.as_view()),
-    path('practice/overview', practice_overview, name="practice-overview")
+    path('practice/overview', practice_overview, name="practice-overview"),
+    path("media/<path:path>", serve_audio),
 ] 
 

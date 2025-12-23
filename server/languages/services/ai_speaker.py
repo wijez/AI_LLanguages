@@ -6,7 +6,15 @@ log = logging.getLogger(__name__)
 USE_PARAPHRASE = bool(int(os.getenv("ROLEPLAY_PARAPHRASE_OTHER", "0")))
 
 def _plain_lines(blocks: List[RoleplayBlock]):
-    return [{"role": b.role or "-", "block_id": str(b.id), "text": b.text} for b in blocks]
+    return [
+        {
+            "role": b.role or "-",
+            "block_id": str(b.id),
+            "text": b.text,
+            "audio_key": b.audio_key,
+        }
+        for b in blocks
+    ]
 
 def _paraphrase_lines(blocks: List[RoleplayBlock]):
     try:
@@ -20,15 +28,30 @@ def _paraphrase_lines(blocks: List[RoleplayBlock]):
         lines = []
         for b in blocks:
             if len(b.text.split()) < 3:
-                lines.append({"role": b.role or "-", "block_id": str(b.id), "text": b.text})
+                lines.append({
+                    "role": b.role or "-",
+                    "block_id": str(b.id),
+                    "text": b.text,
+                    "audio_key": b.audio_key,
+                })
                 continue
             p = f"Paraphrase briefly and keep the intent. Original: {b.text}"
             try:
                 out = (model.generate_content(p).text or "").strip()
-                lines.append({"role": b.role or "-", "block_id": str(b.id), "text": out or b.text})
+                lines.append({
+                    "role": b.role or "-",
+                    "block_id": str(b.id),
+                    "text": out or b.text,
+                    "audio_key": b.audio_key,
+                })
             except Exception as e:
                 log.error(f"Paraphrasing failed for block {b.id}: {e}")
-                lines.append({"role": b.role or "-", "block_id": str(b.id), "text": b.text}) # Fallback
+                lines.append({
+                    "role": b.role or "-",
+                    "block_id": str(b.id),
+                    "text": b.text,
+                    "audio_key": b.audio_key,
+                }) # Fallback
         return lines
     except Exception:
         return _plain_lines(blocks)

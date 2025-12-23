@@ -599,7 +599,7 @@ class RoleplayBlockWriteSerializer(serializers.ModelSerializer):
         model = RoleplayBlock
         fields = [
             "section", "order", "role", "text",
-            "extra", "audio_key", "tts_voice", "lang_hint", "is_active",
+            "extra", "audio_key", "tts_voice", "lang_hint", "is_active", "scenario",
         ]
 
 class RoleplayBlockReadSerializer(serializers.ModelSerializer):
@@ -608,7 +608,8 @@ class RoleplayBlockReadSerializer(serializers.ModelSerializer):
         fields = [
             "id", "section", "order", "role", "text",
             "extra", "audio_key", "tts_voice", "lang_hint", "is_active",
-            "created_at",
+            "created_at", "updated_at",  "embedding", "embedding_text",
+            "embedding_updated_at", "embedding_model", "embedding_hash"
         ]
 
 class RoleplayScenarioWriteSerializer(serializers.ModelSerializer):
@@ -696,31 +697,6 @@ class ScoreSerializer(serializers.Serializer):
     lexical = serializers.FloatField()
     passed  = serializers.BooleanField()
 
-# -------- START --------
-class RoleplayStartIn(serializers.Serializer):
-    scenario = serializers.CharField(help_text="Slug hoặc UUID của Scenario.")
-    role     = serializers.ChoiceField(
-        choices=[c[0] for c in ROLE_CHOICES],
-        help_text="Vai người học sẽ nhập vai (teacher | student_a | student_b | narrator).",
-    )
-
-class RoleplayStartOut(serializers.Serializer):
-    session_id    = serializers.CharField()
-    prologue      = BlockLineSerializer(many=True, help_text="BACKGROUND/INSTRUCTION/WARMUP theo đúng thứ tự.")
-    ai_utterances = BlockLineSerializer(many=True, help_text="Các câu AI nói trước khi đến lượt người học.")
-    await_user    = AwaitUserSerializer(allow_null=True)
-
-# -------- SUBMIT --------
-class RoleplaySubmitIn(serializers.Serializer):
-    session_id = serializers.CharField(help_text="ID phiên tạo từ /start.")
-    transcript = serializers.CharField(help_text="Văn bản chuyển từ giọng nói (Whisper).")
-
-class RoleplaySubmitPassOut(serializers.Serializer):
-    passed   = serializers.BooleanField(default=True)
-    score    = ScoreSerializer()
-    next_ai  = BlockLineSerializer(many=True, help_text="Các câu AI tiếp theo tới lượt người học kế tiếp.")
-    await_user = AwaitUserSerializer(allow_null=True)
-    finished  = serializers.BooleanField()
 
 class RoleplaySubmitFailOut(serializers.Serializer):
     passed   = serializers.BooleanField(default=False)
@@ -741,3 +717,21 @@ class LessonWithProgressSerializer(serializers.ModelSerializer):
         fields = ["id", "title", "order", "xp_reward", "duration_seconds",
                   "content", "total_skills", "completed_skills",
                   "progress_pct", "unlocked", "required_pct"]
+
+class LessonCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Lesson
+        fields = [
+            "title",
+            "content",
+            "order",
+            "xp_reward",
+            "duration_seconds",
+        ]
+class PracticeStartIn(serializers.Serializer):
+    scenario = serializers.CharField(help_text="Slug hoặc UUID của Scenario.")
+    role = serializers.CharField(help_text="Vai người học chọn (student_a/student_b/...).")
+
+class PracticeSubmitIn(serializers.Serializer):
+    session_id = serializers.CharField()
+    transcript = serializers.CharField()

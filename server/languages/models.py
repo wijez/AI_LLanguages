@@ -1,9 +1,11 @@
+from datetime import timedelta
 from django.utils import timezone
 from django.db import models
 from users.models import User
 import uuid
 from django.utils.text import slugify
 from pgvector.django import VectorField
+
 
 class Language(models.Model):
     name = models.CharField(max_length=100)
@@ -31,6 +33,30 @@ class LanguageEnrollment(models.Model):
         ]
         indexes = [models.Index(fields=['user', 'language'])]
 
+    def mark_practiced(self):
+        now = timezone.now()
+        today = now.date()
+        streak_changed = False
+
+        if self.last_practiced:
+            last_date = self.last_practiced.date()
+
+            if today == last_date:
+                # đã luyện hôm nay → không tăng streak
+                pass
+            elif today == last_date + timedelta(days=1):
+                self.streak_days += 1
+                streak_changed = True
+            else:
+                self.streak_days = 1
+                streak_changed = True
+        else:
+            self.streak_days = 1
+            streak_changed = True
+
+        self.last_practiced = now
+        self.save(update_fields=["streak_days", "last_practiced"])
+        return streak_changed
 
 class Topic(models.Model):
     language = models.ForeignKey(Language, on_delete=models.CASCADE, related_name='topics')

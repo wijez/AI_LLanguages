@@ -11,6 +11,9 @@ class Word(models.Model):
     text = models.CharField(max_length=200)
     normalized = models.CharField(max_length=200, blank=True)
     part_of_speech = models.CharField(max_length=50, blank=True)
+    definition = models.TextField(blank=True, help_text="Nghĩa của từ")
+    ipa = models.CharField(max_length=100, blank=True, help_text="Phiên âm, v.d: /həˈləʊ/")
+    audio_url = models.URLField(max_length=500, blank=True, null=True, help_text="Link file phát âm")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -21,6 +24,11 @@ class Word(models.Model):
 
     def __str__(self):
         return self.text
+    
+    def save(self, *args, **kwargs):
+        if self.text:
+            self.normalized = self.text.lower().strip()
+        super().save(*args, **kwargs)
 
 
 class KnownWord(models.Model):
