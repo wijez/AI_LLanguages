@@ -30,7 +30,38 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret')
 DEBUG = True
 
 ALLOWED_HOSTS = []
+CORS_ALLOW_ALL_ORIGINS = True
 
+
+CORS_ALLOW_CREDENTIALS = False
+CORS_ALLOW_HEADERS = [
+    'authorization',
+    'content-type',
+    'ngrok-skip-browser-warning',
+]
+
+# (Tuỳ chọn) Cho phép các method
+from corsheaders.defaults import default_headers
+CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",      
+    "http://127.0.0.1:5173",
+    "https://ai-l-languages-fe-dfyo.vercel.app",
+    "https://ai-l-languages-fe-5vkw.vercel.app",
+    "https://ai-l-languages-fe-pr4t.vercel.app",
+    "https://ai-l-languages-fe.vercel.app",
+    
+]
+#  CSRF (SessionAuth), cần tin tưởng origin FE:
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://ai-l-languages-fe-dfyo.vercel.app",
+    "https://ai-l-languages-fe-5vkw.vercel.app",
+    "https://ai-l-languages-fe-pr4t.vercel.app",
+    "https://d5e6478e8939.ngrok-free.app", 
+    "https://ai-l-languages-fe.vercel.app",
+]
 
 # Application definition
 
@@ -44,11 +75,13 @@ INSTALLED_APPS = [
     'ai_recommend',
     "rest_framework",
     "drf_spectacular",
+    'corsheaders',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',

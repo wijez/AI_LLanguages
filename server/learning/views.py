@@ -11,10 +11,11 @@ from languages.models import (
     Language, Lesson, RoleplayScenario, Skill, LanguageEnrollment, UserSkillStats,
     SkillQuestion, SkillChoice, ListeningPrompt, PronunciationPrompt,
     ReadingContent, ReadingQuestion, WritingQuestion, SkillGap,
-    MatchingPair, OrderingItem, SpeakingPrompt, TopicProgress
+    MatchingPair, OrderingItem, SpeakingPrompt, TopicProgress, PracticeSession
 )
+from vocabulary.models import Word, KnownWord
 from progress.models import DailyXP
-from .models import LessonSession, SessionAnswer
+from .models import LessonSession, SessionAnswer, SkillSession
 from vocabulary.models import Mistake, LearningInteraction
 
 from languages.serializers import SkillSerializer
@@ -22,7 +23,7 @@ from .serializers import *
 import re
 import unicodedata
 from social.services import award_xp_from_lesson, recalc_badges_for_user
-
+from utils.similarity import _calculate_text_similarity
 
 # ============ Utils for checking ============
 def _lesson_skills_qs(lesson_id: int):
@@ -228,7 +229,6 @@ def _compute_unlock_order(enrollment, topic_id, required_pct=REQUIRED_PCT):
             highest = row["order"]
     return (highest or 0) + 1
 
-# ============ ViewSet ============
 class LessonSessionViewSet(mixins.RetrieveModelMixin,
                            mixins.ListModelMixin,
                            viewsets.GenericViewSet):
@@ -294,127 +294,6 @@ class LessonSessionViewSet(mixins.RetrieveModelMixin,
         data = LessonSessionOut(session).data
         data["skills"] = skills_data
         return Response(data, status=201)
-
-
-    @action(detail=True, methods=["post"], url_path="answer")
-    @transaction.atomic
-    def answer(self, request, pk=None):
-        session: LessonSession = self.get_object()
-        if session.status != "in_progress":
-            return Response({"detail": "Session không còn ở trạng thái in_progress."}, status=400)
-
-        ser = AnswerIn(data=request.data)
-        ser.is_valid(raise_exception=True)
-        v = ser.validated_data
-
-        skill: Skill = v["skill"]
-        # skill phải thuộc lesson của session (qua bảng LessonSkill)
-        belongs = Skill.objects.filter(
-            lessonskill__lesson_id=session.lesson_id,
-            pk=skill.pk
-        ).exists()
-        if not belongs:
-            return Response({"detail": "Skill không thuộc lesson của session."}, status=400)
-
-        # --- SERVER CHECK ---
-        qid = v["question_id"]
-        user_answer = v.get("user_answer", "")
-        expected, prompt_text, skill_type = _get_expected_and_prompt(skill, qid)
-        ok = _compare_answer(expected, user_answer, skill_type)
-        # ---------------------
-        SessionAnswer.objects.create(
-            session=session,
-            skill=skill,
-            question_id=qid,
-            is_correct=ok,
-            user_answer=user_answer,
-            expected=(" ".join(expected) if (skill_type == "ordering" and isinstance(expected, (list, tuple))) else (expected or "")),
-            meta={
-                "client": "web",
-                **({"dur": v["duration_seconds"]} if v.get("duration_seconds") else {})
-            }
-        )
-
-        # cập nhật counters & XP
-        session.total_questions += 1
-        xp_gain = 0
-        if ok:
-            session.correct_answers += 1
-            xp_gain = v.get("xp_on_correct", 5)
-            session.xp_earned += xp_gain
-        else:
-            session.incorrect_answers += 1
-
-        # append event
-        now = timezone.now()
-        ad = session.answers_data or {}
-        events = ad.get("events", [])
-        events.append({
-            "t": now.isoformat(),
-            "skill_id": skill.id,
-            "q": qid,
-            "ok": ok,
-        })
-        ad["events"] = events
-        session.answers_data = ad
-        session.last_activity = now
-        session.save(update_fields=[
-            "total_questions", "correct_answers", "incorrect_answers",
-            "xp_earned", "answers_data", "last_activity"
-        ])
-
-        # log LearningInteraction
-        li = LearningInteraction.objects.create(
-            user=request.user,
-            enrollment=session.enrollment,
-            lesson=session.lesson,
-            skill=skill,
-            action="practice_skill",
-            value=(1.0 if ok else 0.0),
-            success=ok,
-            duration_seconds=v.get("duration_seconds") or 0,
-            xp_earned=xp_gain,
-            meta={"question_id": qid}
-        )
-
-        # nếu sai → tạo Mistake gắn lesson + skill
-        mistake_id = None
-        if not ok:
-            m = Mistake.objects.create(
-                user=request.user,
-                enrollment=session.enrollment,
-                interaction=li,
-                lesson=session.lesson,      # ⬅️ gắn lesson chứa skill sai
-                skill=skill,                # ⬅️ gắn skill sai
-                source=v.get("source") or _map_source_from_skill(skill),
-                prompt=v.get("question") or (prompt_text or ""),
-                expected=(" ".join(expected) if (skill_type == "ordering" and isinstance(expected, (list, tuple))) else (expected or "")),
-                user_answer=user_answer,
-                error_detail={"question_id": qid},
-            )
-            mistake_id = m.id
-
-            # Đánh dấu skill cần ôn tập
-            uss, _ = UserSkillStats.objects.get_or_create(
-                enrollment=session.enrollment, skill=skill,
-                defaults={"status": "available"}
-            )
-            uss.mark_for_review()
-
-        # Trả expected để FE hiện đáp án đúng; kèm mistake_id nếu có
-        resp = {
-            "session": LessonSessionOut(session).data,
-            "xp_gain": xp_gain,
-            "server_checked": True,
-            "correct": ok,
-        }
-        if expected is not None:
-            resp["expected"] = (" ".join(expected) if (skill_type == "ordering" and isinstance(expected, (list, tuple))) else (expected or ""))
-
-        if mistake_id:
-            resp["mistake_id"] = mistake_id
-
-        return Response(resp, status=200)
 
     @action(detail=True, methods=["post"], url_path="complete")
     @transaction.atomic
@@ -541,14 +420,181 @@ class LessonSessionViewSet(mixins.RetrieveModelMixin,
         )
 
         return Response(LessonSessionOut(session).data, status=status.HTTP_200_OK)
+  
+    @action(detail=True, methods=["post"], url_path="resume")
+    def resume(self, request, pk=None):
+        """
+        Logic Resume:
+        1. User đã trả lời 3 câu (index 0, 1, 2).
+        2. Backend tính answered_count = 3.
+        3. next_index = 3 (chính là câu thứ 4 trong mảng skills).
+        4. FE nhận next_index và jump thẳng tới câu đó.
+        """
+        session = self.get_object()
 
+        # 1. Validate Status
+        if session.status != "in_progress":
+            return Response(
+                {"detail": "Session này đã kết thúc hoặc bị hủy, không thể resume."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. Update Last Activity (để tránh bị cleanup job quét nhầm)
+        session.last_activity = timezone.now()
+        session.save(update_fields=["last_activity"])
+
+        # 3. Chuẩn bị dữ liệu trả về
+        data = LessonSessionOut(session).data
+        skills_qs = _lesson_skills_qs(session.lesson_id)
+        data["skills"] = SkillSerializer(skills_qs, many=True).data
+
+        # 4. Tính toán ngữ cảnh (Context) để Frontend nhảy đúng câu
+        answered_count = session.answers.count()
+        total_questions = skills_qs.count()
+        
+        # next_index chính là số câu đã trả lời (vì index bắt đầu từ 0)
+        # VD: Đã trả lời 3 câu => Index tiếp theo là 3
+        next_index = answered_count
+
+        data["resume_context"] = {
+            "answered_count": answered_count,
+            "total_questions": total_questions,
+            "next_index": next_index,
+            # Cờ báo hiệu: Nếu đã trả lời hết rồi mà chưa complete -> FE cần gọi complete ngay
+            "is_finished_but_not_completed": answered_count >= total_questions
+        }
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="answer")
+    @transaction.atomic
+    def answer(self, request, pk=None):
+        session: LessonSession = self.get_object()
+        if session.status != "in_progress":
+            return Response({"detail": "Session không còn ở trạng thái in_progress."}, status=400)
+
+        ser = AnswerIn(data=request.data)
+        ser.is_valid(raise_exception=True)
+        v = ser.validated_data
+
+        skill: Skill = v["skill"]
+        # Validate skill thuộc lesson
+        belongs = Skill.objects.filter(
+            lessonskill__lesson_id=session.lesson_id, pk=skill.pk
+        ).exists()
+        if not belongs:
+            return Response({"detail": "Skill không thuộc lesson của session."}, status=400)
+
+        # --- SERVER CHECK ANSWER ---
+        qid = v["question_id"]
+        user_answer = v.get("user_answer", "")
+        expected, prompt_text, skill_type = _get_expected_and_prompt(skill, qid)
+        ok = _compare_answer(expected, user_answer, skill_type)
+        # ---------------------------
+
+        # Lưu SessionAnswer
+        SessionAnswer.objects.create(
+            session=session,
+            skill=skill,
+            question_id=qid,
+            is_correct=ok,
+            user_answer=user_answer,
+            expected=(" ".join(expected) if (skill_type == "ordering" and isinstance(expected, (list, tuple))) else (expected or "")),
+            meta={
+                "client": "web",
+                **({"dur": v["duration_seconds"]} if v.get("duration_seconds") else {})
+            }
+        )
+
+        # Cập nhật Session Stats
+        session.total_questions += 1
+        xp_gain = 0
+        if ok:
+            session.correct_answers += 1
+            xp_gain = v.get("xp_on_correct", 5)
+            session.xp_earned += xp_gain
+        else:
+            session.incorrect_answers += 1
+
+        # Cập nhật JSON events log
+        now = timezone.now()
+        ad = session.answers_data or {}
+        events = ad.get("events", [])
+        events.append({
+            "t": now.isoformat(),
+            "skill_id": skill.id,
+            "q": qid,
+            "ok": ok,
+        })
+        ad["events"] = events
+        session.answers_data = ad
+        session.last_activity = now
+        
+        # Save Session updates
+        session.save(update_fields=[
+            "total_questions", "correct_answers", "incorrect_answers",
+            "xp_earned", "answers_data", "last_activity"
+        ])
+
+        # Log Interaction
+        li = LearningInteraction.objects.create(
+            user=request.user, enrollment=session.enrollment, lesson=session.lesson,
+            skill=skill, action="practice_skill", value=(1.0 if ok else 0.0),
+            success=ok, duration_seconds=v.get("duration_seconds") or 0,
+            xp_earned=xp_gain, meta={"question_id": qid}
+        )
+
+        # Xử lý Mistake nếu sai
+        mistake_id = None
+        if not ok:
+            m = Mistake.objects.create(
+                user=request.user, enrollment=session.enrollment, interaction=li,
+                lesson=session.lesson, skill=skill,
+                source=v.get("source") or _map_source_from_skill(skill),
+                prompt=v.get("question") or (prompt_text or ""),
+                expected=(" ".join(expected) if (skill_type == "ordering" and isinstance(expected, (list, tuple))) else (expected or "")),
+                user_answer=user_answer, error_detail={"question_id": qid},
+            )
+            mistake_id = m.id
+            # Đánh dấu skill cần review
+            uss, _ = UserSkillStats.objects.get_or_create(
+                enrollment=session.enrollment, skill=skill, defaults={"status": "available"}
+            )
+            uss.mark_for_review()
+
+        total_questions_count = _lesson_skills_qs(session.lesson_id).count()
+        current_answers_count = session.answers.count()
+        
+        # Cờ báo hiệu kết thúc
+        is_finished = current_answers_count >= total_questions_count
+
+        # ====================================================
+
+        # Trả về Response
+        resp = {
+            "session": LessonSessionOut(session).data,
+            "xp_gain": xp_gain,
+            "server_checked": True,
+            "correct": ok,
+            
+            # FE dựa vào cờ này để hiện màn hình End Screen và gọi /complete
+            "is_finished": is_finished,
+            "progress_status": f"{current_answers_count}/{total_questions_count}"
+        }
+
+        if expected is not None:
+            resp["expected"] = (" ".join(expected) if (skill_type == "ordering" and isinstance(expected, (list, tuple))) else (expected or ""))
+        if mistake_id:
+            resp["mistake_id"] = mistake_id
+
+        return Response(resp, status=200)
 
 @api_view(["GET"])
 @permission_classes([permissions.IsAuthenticated])
 def practice_overview(request):
     user = request.user
     raw_lang = request.GET.get("language")
-    limit = int(request.GET.get("limit", 10))
+    limit = int(request.GET.get("limit", 20))
     now = timezone.now()
 
     # --- 1. Resolve Enrollment ---
@@ -571,7 +617,7 @@ def practice_overview(request):
     xp_today = DailyXP.objects.filter(
         user=user, date=timezone.localdate()
     ).values_list("xp", flat=True).first() or 0
-    daily_goal = getattr(enrollment, "daily_goal", 60) # daily_goal trên enrollment, nếu không thì lấy từ settings
+    daily_goal = getattr(enrollment, "daily_goal", 60) 
 
     # ----- 3. SRS due words (KnownWord) -----
     due_words_qs = (
@@ -586,13 +632,12 @@ def practice_overview(request):
     words_qs = (
         Word.objects.filter(language=lang_obj)
         .exclude(id__in=known_ids)
-        .order_by("id")[:limit] # Hoặc order_by("?") để lấy ngẫu nhiên
+        .order_by("id")[:limit] 
     )
 
     # ----- 5. Common Mistakes -----
     # Truy vấn 'source' và 'timestamp' từ model Mistake
     # Đổi tên (alias) 'source' thành 'error_type' cho serializer
-
     mistakes_raw = (
         Mistake.objects
         .filter(enrollment=enrollment)
@@ -636,15 +681,13 @@ def practice_overview(request):
     )
 
     # ----- 8. Roleplay (Speak/Listen) -----
-    scenarios_qs = (
-        RoleplayScenario.objects
-        .filter(is_active=True) # Nên có filter theo language nếu model RoleplayScenario có
-        .order_by("level", "order")[:limit]
+    sessions_qs = (
+        PracticeSession.objects
+        .filter(user=user) 
+        .select_related("scenario")
+        .order_by("-updated_at")[:limit]
     )
-    # Nếu RoleplayScenario có trường language FK:
-    # scenarios_qs = RoleplayScenario.objects.filter(language=lang_obj, is_active=True)...
 
-    # ----- 9. Serialize Data -----
     data = {
         "enrollment": EnrollmentMiniSerializer(enrollment).data,
         "xp_today": int(xp_today or 0),
@@ -654,10 +697,9 @@ def practice_overview(request):
         "common_mistakes": MistakeAggSerializer(mistakes_qs, many=True).data,
         "weak_skills": WeakSkillSerializer(weak_qs, many=True).data,
         "micro_lessons": MicroLessonSerializer(micro_qs, many=True).data,
-        "speak_listen": RoleplayMiniSerializer(scenarios_qs, many=True).data,
+        "speak_listen": PracticeSessionSerializer(sessions_qs, many=True).data,
     }
     
-    # Validate và trả về
     return Response(PracticeOverviewSerializer(data).data)
 
 
@@ -669,7 +711,18 @@ class SkillSessionViewSet(mixins.RetrieveModelMixin,
     queryset = SkillSession.objects.all()
 
     def get_queryset(self):
-        return super().get_queryset().filter(user=self.request.user)
+        qs = super().get_queryset().filter(user=self.request.user)
+        
+        enrollment_id = self.request.query_params.get('enrollment')
+        if enrollment_id:
+            qs = qs.filter(enrollment_id=enrollment_id)
+
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            statuses = status_param.split(',')
+            qs = qs.filter(status__in=statuses)
+            
+        return qs.order_by('-started_at')
 
     @action(detail=False, methods=["post"], url_path="start")
     @transaction.atomic
@@ -707,30 +760,32 @@ class SkillSessionViewSet(mixins.RetrieveModelMixin,
     @transaction.atomic
     def complete(self, request, pk=None):
         """
-        Chốt phiên kỹ năng, có thể nhận final_xp.
-        Body: { "final_xp": 10? }
+        Chốt phiên kỹ năng. Tự động tính toán Best Score, Avg Score và XP.
+        Frontend không cần gửi body gì cả, hoặc gửi {}.
         """
         ss: SkillSession = self.get_object()
-        if ss.status != "in_progress":
-            return Response({"detail": "Session không còn ở trạng thái in_progress."}, status=400)
-
-        final_xp = int(request.data.get("final_xp") or ss.xp_earned or 0)
-        ss._recalc_scores()
-        ss.mark_completed(final_xp=final_xp)
-        # tính streak cho luyện skill rời
-        ss.enrollment.mark_practiced()
-
-        # cộng XP vào enrollment (giống LessonSession.complete_session)
-        if final_xp and final_xp > 0:
-            ss.enrollment.total_xp += final_xp
+        
+        # 1. Xác định XP thưởng từ cấu hình Skill (Mặc định 10)
+        skill_xp = getattr(ss.skill, 'xp_reward', 10) 
+        
+        # 2. Đánh dấu hoàn thành & Lưu DB
+        ss.mark_completed(final_xp=skill_xp)
+        
+        # 3. Cộng dồn vào Enrollment (Tổng XP khóa học)
+        if ss.xp_earned > 0:
+            ss.enrollment.total_xp = F('total_xp') + ss.xp_earned
             ss.enrollment.save(update_fields=["total_xp"])
+            # Refresh lại từ DB để lấy số chính xác nếu cần hiển thị
+            ss.enrollment.refresh_from_db()
+
+        # 4. Tính toán Badge/Thành tích (nếu có hệ thống gamification)
         try:
             recalc_badges_for_user(
                 request.user,
                 limit_types=["speaking_sessions", "total_xp"],
             )
         except Exception as e:
-            print("[badges] recalc after skill session complete failed:", e)
+            print("[badges] Error:", e)
 
         return Response(SkillSessionOut(ss).data, status=200)
 
@@ -740,11 +795,14 @@ class SkillSessionViewSet(mixins.RetrieveModelMixin,
         ss: SkillSession = self.get_object()
         if ss.status != "in_progress":
             return Response({"detail": "Chỉ hủy khi session đang 'in_progress'."}, status=400)
+        
         as_failed = bool(request.data.get("as_failed") or False)
         ss.status = "failed" if as_failed else "abandoned"
         ss.completed_at = timezone.now()
+        
         if ss.started_at:
             ss.duration_seconds = int((ss.completed_at - ss.started_at).total_seconds())
+        
         ss.save(update_fields=["status", "completed_at", "duration_seconds"])
         return Response(SkillSessionOut(ss).data, status=200)
 
@@ -756,3 +814,31 @@ class SkillSessionViewSet(mixins.RetrieveModelMixin,
         ss: SkillSession = self.get_object()
         qs = ss.attempts.order_by("-created_at")
         return Response(PronAttemptOut(qs, many=True).data, status=200)
+
+    @action(detail=True, methods=["post"], url_path="save_attempt")
+    def save_attempt(self, request, pk=None):
+        """
+        Nhận kết quả chấm điểm từ FE và lưu vào PronAttempt.
+        Tự động kích hoạt tính lại điểm cho Session.
+        """
+        session = self.get_object()
+        d = request.data
+
+        # 1. Tạo PronAttempt
+        # Lưu ý: method .save() của model PronAttempt đã có logic gọi session._recalc_scores()
+        PronAttempt.objects.create(
+            session=session,
+            prompt_id_id=d.get("prompt_id"),
+            expected_text=d.get("expected_text", ""),
+            recognized=d.get("recognized", ""),
+            score_overall=float(d.get("score_overall", 0)),
+            words=d.get("words", []),
+            details=d.get("details", {}),
+            audio_path=d.get("audio_path", "")
+        )
+
+        # 2. Trả về thông tin Session mới nhất (đã được tính lại điểm)
+        session.refresh_from_db()
+        return Response(SkillSessionOut(session).data, status=200)
+
+ 

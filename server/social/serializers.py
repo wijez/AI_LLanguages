@@ -40,6 +40,7 @@ class CalendarEventSerializer(serializers.ModelSerializer):
     class Meta: 
         model = CalendarEvent
         fields = '__all__'
+        read_only_fields = ['user', 'created_at']
 
 
 class LeaderboardEntrySerializer(serializers.ModelSerializer):

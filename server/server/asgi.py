@@ -9,9 +9,10 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "server.settings")
 django.setup()
 from social.middleware import RequestIDWebSocketMiddleware, JWTAuthMiddleware
 from social.routing import websocket_urlpatterns
+from languages.routing import websocket_urlpatterns as ls
 
 
-
+websocket_urlpatterns += ls
 django_asgi_app = get_asgi_application()
 
 application = ProtocolTypeRouter({
@@ -21,7 +22,7 @@ application = ProtocolTypeRouter({
         RequestIDWebSocketMiddleware(
             JWTAuthMiddleware(
                 AuthMiddlewareStack(
-                    URLRouter(websocket_urlpatterns)
+                    URLRouter(websocket_urlpatterns),
                 )
             )
         )

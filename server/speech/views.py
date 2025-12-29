@@ -625,7 +625,7 @@ class PronunciationTTSSampleView(APIView):
             "cached": False,
             "mimetype": mimetype,
             "audio_base64": audio_b64,   # cho phát ngay lần đầu
-            "url": abs_url,              # FE nên ưu tiên dùng URL (đã cache)
+            "url": abs_url,              
             "duration": duration,
             "provider": "piper",
         })
@@ -671,13 +671,11 @@ class SpeechToTextView(APIView):
             return Response({"detail": "Missing audio (file or base64)."}, status=400)
 
         # 2. Chuẩn bị định dạng cho service stt_transcribe
-        # stt_transcribe thường nhận Data URI (data:audio/...) hoặc path
         try:
             # Convert ngược lại thành chuẩn Data URI để tái sử dụng service hiện có
             b64_str = base64.b64encode(raw_bytes).decode('utf-8')
             audio_data_uri = f"data:audio/unknown;base64,{b64_str}"
             
-            # Gọi service STT (Whisper/Google...)
             recognized_text = stt_transcribe(audio_data_uri, lang) or ""
             
             return Response({

@@ -96,6 +96,26 @@ class FriendViewSet(viewsets.ModelViewSet):
 class CalendarEventViewSet(viewsets.ModelViewSet):
     queryset = CalendarEvent.objects.all()
     serializer_class = CalendarEventSerializer
+    def get_permissions(self):
+        if self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
+        # Các hành động create, update, delete, patch yêu cầu quyền Admin/SuperAdmin
+        return [ IsAdminOrSuperAdmin()] 
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        if user.is_staff or user.is_superuser:
+            return CalendarEvent.objects.all().order_by("-start")
+
+        return CalendarEvent.objects.filter(
+            Q(user__is_staff=True) | 
+            Q(user__is_superuser=True) | 
+            Q(participants=user)
+        ).distinct().order_by("start")
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
     
 
 

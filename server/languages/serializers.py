@@ -731,7 +731,42 @@ class LessonCreateSerializer(serializers.ModelSerializer):
 class PracticeStartIn(serializers.Serializer):
     scenario = serializers.CharField(help_text="Slug hoặc UUID của Scenario.")
     role = serializers.CharField(help_text="Vai người học chọn (student_a/student_b/...).")
+    language = serializers.CharField(required=False, default="en")
 
 class PracticeSubmitIn(serializers.Serializer):
     session_id = serializers.CharField()
     transcript = serializers.CharField()
+
+class PracticeSessionSerializer(serializers.ModelSerializer):
+    title = serializers.CharField(source='scenario.title', read_only=True)
+    level = serializers.CharField(source='scenario.level', read_only=True)
+    scenario_slug = serializers.CharField(source='scenario.slug', read_only=True)
+
+    class Meta:
+        model = PracticeSession
+        fields = ("id", "title","system_context", "level", "scenario_slug", "role", "updated_at")
+        read_only_fields = fields
+
+class PracticeSessionDetailSerializer(serializers.ModelSerializer):
+    title = serializers.CharField(source='scenario.title', read_only=True)
+    level = serializers.CharField(source='scenario.level', read_only=True)
+    scenario_slug = serializers.CharField(source='scenario.slug', read_only=True)
+    
+    scenario = serializers.UUIDField(source='scenario_id', read_only=True)
+
+    class Meta:
+        model = PracticeSession
+   
+        fields = [
+            "id", 
+            "scenario", 
+            "title", 
+            "level", 
+            "scenario_slug", 
+            "role", 
+            "history_log",    
+            "system_context",  
+            "created_at", 
+            "updated_at"
+        ]
+        read_only_fields = fields

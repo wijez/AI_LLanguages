@@ -492,3 +492,24 @@ class RoleplayBlock(models.Model):
 
     def __str__(self):
         return f"{self.scenario.slug} · {self.section} · #{self.order} · {self.role or '-'}"
+
+
+class PracticeSession(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="practice_sessions")
+    scenario = models.ForeignKey(RoleplayScenario, on_delete=models.CASCADE, related_name="practice_sessions")
+    role = models.CharField(max_length=50) 
+    history_log = models.JSONField(default=list, blank=True)
+    system_context = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"] 
+        indexes = [
+            models.Index(fields=["user", "scenario"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.scenario.title}"

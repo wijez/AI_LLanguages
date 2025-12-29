@@ -2,6 +2,7 @@ from django.db import models
 from django.utils import timezone
 from users.models import User
 from languages.models import LanguageEnrollment, Lesson, PronunciationPrompt, Skill
+from django.db.models import Max, Avg
 
 class LessonSession(models.Model):
     """
@@ -175,25 +176,55 @@ class SkillSession(models.Model):
             return False
         return (timezone.now() - self.last_activity).total_seconds() < 1800
 
+    
     def _recalc_scores(self):
-        atts = list(self.attempts.all().values_list('score_overall', flat=True))
-        if not atts:
+        """
+        Tính toán lại thống kê dựa trên tất cả các PronAttempt của session này.
+        Được gọi tự động mỗi khi có một PronAttempt mới được lưu.
+        """
+        # Lấy queryset các lần thử
+        atts = self.attempts.all()
+        count = atts.count()
+        
+        self.attempts_count = count
+
+        if count > 0:
+            stats = atts.aggregate(
+                max_score=Max('score_overall'),
+                avg_score=Avg('score_overall')
+            )
+            self.best_score = stats['max_score'] or 0.0
+            self.avg_score = stats['avg_score'] or 0.0
+        else:
             self.best_score = 0.0
-            self.avg_score  = 0.0
-            self.attempts_count = 0
-            return
-        self.attempts_count = len(atts)
-        self.best_score = float(max(atts))
-        self.avg_score  = float(sum(atts) / max(1, len(atts)))
+            self.avg_score = 0.0
+        
+        # Chỉ save các trường cần thiết để tránh overwrite dữ liệu khác
+        self.save(update_fields=['attempts_count', 'best_score', 'avg_score'])
 
     def mark_completed(self, final_xp=None):
         if self.status != 'in_progress':
             return
+            
+        # Gọi hàm tính điểm trước khi complete
+        self._recalc_scores()
+        
         self.status = 'completed'
         self.completed_at = timezone.now()
-        self.duration_seconds = int((self.completed_at - self.started_at).total_seconds())
+        
+        if self.started_at:
+            self.duration_seconds = int((self.completed_at - self.started_at).total_seconds())
+        
+        # 4. xp_earned: Gán XP. 
+        # Nếu final_xp được truyền vào thì dùng, không thì lấy từ Skill (nếu có field reward)
         if final_xp is not None:
             self.xp_earned = int(final_xp)
+        else:
+            # Logic: Lấy XP thưởng từ bảng Skill (giả sử model Skill có field xp_reward)
+            # Nếu không có field đó thì mặc định là 10 XP
+            default_skill_xp = getattr(self.skill, 'xp_reward', 10)
+            self.xp_earned = int(default_skill_xp)
+
         self.save(update_fields=['status', 'completed_at', 'duration_seconds', 'xp_earned'])
 
 
@@ -221,3 +252,13 @@ class PronAttempt(models.Model):
 
     def __str__(self):
         return f"PronAttempt({self.session_id if hasattr(self,'session_id') else self.session_id}) score={self.score_overall}"
+    
+    def save(self, *args, **kwargs):
+        """
+        Khi lưu lần thử, tự động gọi cha (Session) tính lại điểm.
+        """
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        
+        if self.session:
+            self.session._recalc_scores()

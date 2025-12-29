@@ -11,21 +11,7 @@ from ai_recommend.services.rankers import rank_skills, rank_words
 from ai_recommend.models import Recommendation, AIModelVersion
 from ..auth.jwt_session import JWTSession
 from django.conf import settings
-
-
-
-def _parse_iso_dt(value: Optional[str]):
-    """Parse ISO datetime string (kể cả dạng có 'Z') -> aware datetime (UTC)."""
-    if not value:
-        return None
-    try:
-        v = str(value).replace("Z", "+00:00")
-        dt = datetime.fromisoformat(v)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=dt_timezone.utc)
-        return dt
-    except Exception:
-        return None
+from .feature_and_rank import _to_dt
 
 
 def generate_recommendations_for_user(
@@ -61,7 +47,7 @@ def generate_recommendations_for_user(
             skill_meta[sid] = {
                 "level": row.get("level", 0),
                 "proficiency": row.get("proficiency_score", 0.0),
-                "last_practiced": _parse_iso_dt(row.get("last_practiced")),
+                "last_practiced": _to_dt(row.get("last_practiced")),
                 "status": row.get("status", "available"),
                 "needs_review": row.get("needs_review", False),
             }

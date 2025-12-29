@@ -1,11 +1,12 @@
 from rest_framework import serializers
 
+from languages.serializers import PracticeSessionSerializer
 from vocabulary.models import KnownWord, Word
 from .models import (
     LessonSession, PronAttempt, SessionAnswer, SkillSession
 )
 from languages.models import (
-    Lesson, LanguageEnrollment, RoleplayScenario, Skill
+    Lesson, LanguageEnrollment, PracticeSession, RoleplayScenario, Skill
 )
 
 
@@ -61,6 +62,7 @@ class EnrollmentMiniSerializer(serializers.ModelSerializer):
             getattr(lang, "abbreviation", None)
             or getattr(lang, "abbr", None)
             or getattr(lang, "code", None)
+            or getattr(lang, "lang", None)
         )
 
 class WordMiniSerializer(serializers.ModelSerializer):
@@ -125,6 +127,7 @@ class WordSuggestSerializer(serializers.ModelSerializer):
         fields = ("id", "text", "part_of_speech", "level")
         read_only_fields = fields
 
+
 class PracticeOverviewSerializer(serializers.Serializer):
     enrollment = EnrollmentMiniSerializer()
     xp_today = serializers.IntegerField()
@@ -133,7 +136,7 @@ class PracticeOverviewSerializer(serializers.Serializer):
     common_mistakes = MistakeAggSerializer(many=True)
     weak_skills = WeakSkillSerializer(many=True)
     micro_lessons = MicroLessonSerializer(many=True)
-    speak_listen = RoleplayMiniSerializer(many=True)
+    speak_listen = PracticeSessionSerializer(many=True)
     word_suggestions = WordSuggestSerializer(many=True)
 
 
@@ -143,10 +146,15 @@ class SkillSessionStartIn(serializers.Serializer):
     lesson = serializers.PrimaryKeyRelatedField(queryset=Lesson.objects.all(), required=False, allow_null=True)
 
 class SkillSessionOut(serializers.ModelSerializer):
+    skill_title = serializers.CharField(source='skill.title', read_only=True)
+    skill_type = serializers.CharField(source='skill.type', read_only=True)
+    lesson_title = serializers.CharField(source='lesson.title', read_only=True)
     class Meta:
         model = SkillSession
         fields = [
             "id", "skill", "lesson", "enrollment", "status",
+            "skill_title", "skill_type",
+            "lesson_title",
             "started_at", "completed_at", "last_activity",
             "attempts_count", "best_score", "avg_score",
             "xp_earned", "duration_seconds", "meta",
@@ -159,3 +167,6 @@ class PronAttemptOut(serializers.ModelSerializer):
             "id", "created_at", "expected_text", "recognized", "score_overall",
             "words", "details", "audio_path", "prompt_id",
         ]
+
+
+

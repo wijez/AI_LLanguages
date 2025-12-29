@@ -13,6 +13,7 @@ from django.utils.dateparse import parse_datetime
 from django.shortcuts import get_object_or_404
 
 
+from users.views import *
 from speech.services_block_tts import generate_block_tts, generate_tts_from_text
 from utils.permissions import HasInternalApiKey, IsAdminOrSuperAdmin
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -1282,154 +1283,154 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
             "await_user": next_await,
             "finished": idx >= len(dlg_ids),
         })
-    @action(detail=False, methods=["post"], url_path="practice")
-    def practice(self, request):
-        """
-        Trả về các block luyện tập của kịch bản (không bao gồm phần hội thoại).
 
-        body: { "scenario": "<slug|uuid>" }
-        """
-        sc = request.data.get("scenario")
-        if not sc:
-            return Response({"detail": "scenario required"}, status=400)
-
-        scn = RoleplayScenario.objects.filter(slug=sc).first() \
-              or get_object_or_404(RoleplayScenario, id=sc)
-
-        blocks = practice_blocks(scn)
-
-        return Response({
-            "scenario": {
-                "id": str(scn.id),
-                "slug": scn.slug,
-                "title": scn.title,
-                "level": scn.level,
-            },
-            "blocks": [
-                {
-                    "id": str(b.id),
-                    "section": b.section,
-                    "order": b.order,
-                    "role": b.role or "-",
-                    "text": b.text,
-                    "extra": b.extra,
-                    "audio_key": b.audio_key,
-                    "tts_voice": b.tts_voice,
-                    "lang_hint": b.lang_hint,
-                }
-                for b in blocks
-            ],
-        })
-
-    @action(detail=False, methods=["post"], url_path="practice-gemini")
-    def practice_gemini(self, request):
-        """
-        Gọi Gemini để sinh đoạn hội thoại dựa trên các block luyện tập
-        (background, instruction, warmup, vocabulary) thay vì kịch bản dialogue.
-
-        body: { "scenario": "<slug|uuid>", "query": "<prompt>" }
-        """
-
-        sc = request.data.get("scenario")
-        query = (request.data.get("query") or "").strip()
-
-        if not sc:
-            return Response({"detail": "scenario required"}, status=400)
-        if not query:
-            return Response({"detail": "query required"}, status=400)
-
-        scn = RoleplayScenario.objects.filter(slug=sc).first() \
-              or get_object_or_404(RoleplayScenario, id=sc)
-
-        blocks = practice_blocks(scn)
-        answer = ask_gemini(query, blocks)
-
-        return Response({
-            "answer": answer,
-            "scenario": {
-                "id": str(scn.id),
-                "slug": scn.slug,
-                "title": scn.title,
-                "level": scn.level,
-            },
-            "context": RoleplayBlockReadSerializer(blocks, many=True).data,
-        })
     @action(detail=False, methods=["post"], url_path="start-practice")
     def start_practice(self, request):
         serializer = PracticeStartIn(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         sc_slug = serializer.validated_data["scenario"]
         role = serializer.validated_data["role"]
+        language = serializer.validated_data.get("language", "vi")
 
-        scn = RoleplayScenario.objects.filter(slug=sc_slug).first() \
-              or get_object_or_404(RoleplayScenario, id=sc_slug)
-        
-        # 1. Tách Block:
-        # - Context Blocks: Background, Instruction, Vocabulary... (để làm system prompt)
-        # - Warmup Block: Để làm câu chào đầu tiên của AI
-        all_blocks = RoleplayBlock.objects.filter(scenario=scn).exclude(section="dialogue").order_by("order")
-        
+        scn = (
+            RoleplayScenario.objects.filter(slug=sc_slug).first()
+            or get_object_or_404(RoleplayScenario, id=sc_slug)
+        )
+
+        # 1. Load blocks
+        all_blocks = RoleplayBlock.objects.filter(
+            scenario=scn
+        ).order_by("order")
+
         context_blocks = []
-        warmup_block = None
+        warmup_blocks = []
 
         for b in all_blocks:
-            if b.section == 'warmup':
-                warmup_block = b # Lấy warmup cuối cùng hoặc đầu tiên tùy logic, ở đây lấy cái tìm thấy
+            if b.section == "warmup":
+                warmup_blocks.append(b)
             else:
                 context_blocks.append(b)
 
-        # 2. Xây dựng System Prompt (CHỈ dùng context_blocks)
-        sys_ctx = f"Scenario: {scn.title}\nLevel: {scn.level}\n"
-        for b in context_blocks:
-            sys_ctx += f"[{b.section.upper()}]: {b.text}\n"
-        
-        sys_ctx += (
-            f"\nINSTRUCTION:\n"
-            f"- You are roleplaying with a user. The user plays '{role}'.\n"
-            f"- You play the other role(s).\n"
-            f"- Respond naturally in spoken English. Keep it concise (1-3 sentences).\n"
-            f"- Do NOT prefix your response with a role name."
-        )
+        # 2. Build SYSTEM CONTEXT
+        sys_ctx = f"""
+            Scenario: {scn.title}
+            Level: {scn.level}
+            Learner support language: {language}
 
-        # 3. Chuẩn bị History & Greeting
+            You are an AI language tutor participating in a roleplay conversation for language learning.
+
+            Your task is NOT to translate blindly.
+            You MUST follow the 4-step response structure below whenever the USER speaks English.
+
+            The TARGET_LANGUAGE is: {language}
+
+            === REQUIRED PROCESSING RULES ===
+
+            1. USER ORIGINAL
+            - Preserve the user's original English sentence exactly as written.
+            - Do NOT modify it.
+
+            2. GRAMMAR & STRUCTURE FIX
+            - Provide a corrected English version.
+            - Fix grammar, word choice, structure.
+            - Preserve meaning.
+            - If already correct, repeat unchanged.
+
+            3. MEANING (TARGET_LANGUAGE)
+            - Translate ONLY the corrected sentence.
+            - Use natural {language}.
+
+            4. AI RESPONSE (ROLEPLAY CONTINUATION)
+            - Continue the roleplay naturally in English.
+            - Ask at least ONE follow-up question.
+            - Then translate your response to {language}.
+
+            === OUTPUT FORMAT (STRICT) ===
+
+            USER (Original):
+            {{user_sentence}}
+
+            AI – Grammar Fix:
+            {{corrected_sentence}}
+
+            AI – Meaning ({language}):
+            {{translated_meaning}}
+
+            AI – Response (EN):
+            {{ai_reply}}
+
+            AI – Response ({language}):
+            {{translated_reply}}
+
+            === SECTION AWARENESS ===
+            """
+
+        for b in context_blocks:
+            sys_ctx += f"\n[{b.section.upper()}]: {b.text}\n"
+
+        sys_ctx += f"""
+            ROLE DEFINITION
+            - The user plays the role: {role}
+            - You play all other necessary roles.
+
+            CORE BEHAVIOR
+            - You are the ACTIVE conversation driver.
+            - NEVER end a turn without a question.
+            - Stay strictly within scenario and instruction blocks.
+
+            FORBIDDEN
+            - NEVER skip steps
+            - NEVER merge steps
+            - NEVER answer without a question
+            """
+
+        # 3. Init history
         history = []
         ai_greeting_data = None
 
-        # Nếu có Warmup -> Đưa vào lịch sử coi như AI đã nói
-        if warmup_block:
-            history.append({"role": "model", "parts": [warmup_block.text]})
-            # Data để trả về FE phát luôn
+        if warmup_blocks:
+            first_warmup = warmup_blocks[0]
+            history.append({
+                "role": "model",
+                "parts": [first_warmup.text]
+            })
             ai_greeting_data = {
-                "text": warmup_block.text,
-                "audio_key": warmup_block.audio_key, # Warmup thường có sẵn audio trong DB
-                "role": "assistant" 
+                "text": first_warmup.text,
+                "audio_key": first_warmup.audio_key,
+                "role": "assistant"
             }
-        else:
-            # Nếu không có Warmup -> AI im lặng chờ User nói trước, hoặc tự sinh câu chào (tuỳ chọn)
-            pass
 
-        # 4. Tạo Session
+        # 4. Create session
         sid = str(uuid.uuid4())
-        sess_data = {
+
+        if request.user.is_authenticated:
+            PracticeSession.objects.create(
+                id=sid,
+                user=request.user,
+                scenario=scn,
+                role=role,
+                system_context=sys_ctx,
+                history_log=history
+            )
+
+        save_session(sid, {
             "mode": "practice",
             "scenario_id": str(scn.id),
             "user_role": role,
             "system_context": sys_ctx,
-            "history": history, # History đã chứa Warmup (nếu có)
+            "history": history,
             "created_at": int(time.time()),
-        }
-        save_session(sid, sess_data)
+            "language": language,
+        })
 
-        # 5. Trả về
-        # prologue: Chỉ chứa thông tin tĩnh để hiển thị context
-        prologue_data = [RoleplayBlockReadSerializer(b).data for b in context_blocks]
-        
         return Response({
             "session_id": sid,
-            "prologue": prologue_data,
-            "ai_greeting": ai_greeting_data, 
-            "message": "Session started."
+            "prologue": [RoleplayBlockReadSerializer(b).data for b in context_blocks],
+            "ai_greeting": ai_greeting_data,
+            "message": "Session started"
         })
+
 
     @action(detail=False, methods=["post"], url_path="submit-practice")
     def submit_practice(self, request):
@@ -1438,14 +1439,33 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
         sid = serializer.validated_data["session_id"]
         transcript = serializer.validated_data["transcript"]
 
+        # A. Ưu tiên lấy từ Cache
         sess = get_session(sid)
-        if not sess or sess.get("mode") != "practice":
-            return Response({"detail": "Invalid session"}, status=400)
+        
+        # B Nếu Cache mất (do restart server), thử phục hồi từ DB
+        if not sess:
+            try:
+                db_sess = PracticeSession.objects.get(id=sid)
+                # Rehydrate cache từ DB
+                sess = {
+                    "mode": "practice",
+                    "scenario_id": str(db_sess.scenario.id),
+                    "user_role": db_sess.role,
+                    "system_context": db_sess.system_context,
+                    "history": db_sess.history_log,
+                    "created_at": db_sess.created_at.timestamp()
+                }
+                save_session(sid, sess) # Lưu lại vào cache
+            except PracticeSession.DoesNotExist:
+                return Response({"detail": "Invalid session"}, status=400)
+
+        if sess.get("mode") != "practice":
+             return Response({"detail": "Session mode mismatch"}, status=400)
 
         history = sess.get("history", [])
         sys_ctx = sess.get("system_context", "")
         
-        # 1. Gọi Gemini (nhận về Dict)
+        # 1. Gọi Gemini
         ai_data = ask_gemini_chat(sys_ctx, history, transcript)
         
         ai_reply = ai_data.get("reply", "") or "..."
@@ -1453,21 +1473,24 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
         explanation = ai_data.get("explanation")
 
         # 2. Update History
-        # Lưu ý: Chỉ lưu phần hội thoại chính vào history để ngữ cảnh các vòng sau không bị rối bởi phần sửa lỗi
         history.append({"role": "user", "parts": [transcript]})
         history.append({"role": "model", "parts": [ai_reply]})
         sess["history"] = history
         save_session(sid, sess)
 
-        # 3. Sinh Audio cho câu Reply
+        if request.user.is_authenticated:
+            PracticeSession.objects.filter(id=sid).update(
+                history_log=history,
+                updated_at=timezone.now()
+            )
+
+        # 4. Sinh Audio
         ai_audio = generate_tts_from_text(ai_reply, lang="en")
 
-        # 4. Trả về Response kèm thông tin giáo dục
         return Response({
             "user_transcript": transcript,
             "ai_text": ai_reply,
             "ai_audio": ai_audio,
-            # Data sửa lỗi
             "feedback": {
                 "has_error": bool(correction),
                 "original": transcript,
@@ -1475,3 +1498,57 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
                 "explanation": explanation
             }
         })
+
+    @action(detail=False, methods=["get"], url_path="history", permission_classes=[IsAuthenticated])
+    def history(self, request):
+        """
+        Lấy danh sách các phiên Practice cũ.
+        Yêu cầu GenericViewSet để có self.paginate_queryset.
+        """
+        qs = PracticeSession.objects.filter(user=request.user).select_related('scenario')
+        
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            serializer = PracticeSessionSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = PracticeSessionSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=["get"], url_path="resume", permission_classes=[IsAuthenticated])
+    def resume(self, request, pk=None):
+        """
+        Lấy chi tiết và nạp lại Cache cho một phiên cũ
+        """
+        session = get_object_or_404(PracticeSession, pk=pk, user=request.user)
+        
+        # Nạp lại Cache để user chat tiếp 
+        sid = str(session.id)
+        sess_data = {
+            "mode": "practice",
+            "scenario_id": str(session.scenario.id),
+            "user_role": session.role,
+            "system_context": session.system_context,
+            "history": session.history_log,
+            "created_at": session.created_at.timestamp()
+        }
+        save_session(sid, sess_data)
+
+        return Response(PracticeSessionDetailSerializer(session).data)
+
+
+class PracticeSessionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    API quản lý lịch sử Practice Session.
+    - GET /api/practice-sessions/     : Danh sách rút gọn
+    - GET /api/practice-sessions/{id}/: Chi tiết đầy đủ (kèm history_log)
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return PracticeSession.objects.filter(user=self.request.user).select_related('scenario').order_by('-updated_at')
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return PracticeSessionDetailSerializer
+        return PracticeSessionSerializer

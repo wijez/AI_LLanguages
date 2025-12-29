@@ -8,7 +8,7 @@ from social.views import *
 from languages.views import *
 from progress.views import * 
 from vocabulary.views import * 
-from learning.views import * 
+from learning.views import *
 
 
 router = DefaultRouter()
@@ -34,7 +34,7 @@ router.register(r'roleplay-session', RoleplaySessionViewSet, basename='roleplay-
 #Learning
 router.register(r'learning/sessions', LessonSessionViewSet, basename='learning-session')
 router.register(r'skill_sessions', SkillSessionViewSet, basename='skill-session')
-
+router.register(r'practice-sessions', PracticeSessionViewSet, basename='practice-session')
 
 # Vocabulary
 

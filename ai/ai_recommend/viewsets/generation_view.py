@@ -32,7 +32,7 @@ class GenerateRecommendationView(APIView):
         enrollment_id = request.data.get("enrollment_id")
         language = request.data.get("language")
         
-        if not enrollment_id or not language:
+        if enrollment_id is None or not language:
             return Response({"detail": "Yêu cầu 'enrollment_id' và 'language'"}, status=status.HTTP_400_BAD_REQUEST)
 
         top_k = request.data.get("top_k_skills", 5)
