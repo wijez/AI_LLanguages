@@ -46,7 +46,16 @@ class LessonSession(models.Model):
     # Additional data
     duration_seconds = models.IntegerField(default=0)
     answers_data = models.JSONField(default=dict, blank=True, help_text="Chi tiết từng câu trả lời")
+    recommendation_id = models.IntegerField(null=True, blank=True, help_text="ID từ AI Recommendation")
     
+    focus_skill = models.ForeignKey(
+        "languages.Skill", 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name="focused_lesson_sessions", 
+        help_text="Nếu set, session này chỉ luyện duy nhất skill này"
+    )
     class Meta:
         indexes = [
             models.Index(fields=['user', 'started_at']),

@@ -6,6 +6,10 @@ from django.http import JsonResponse
 from django.views import View
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+
+from ..auth.authentication import BEJWTAuthentication
+
+from ..services.exporter import export_snapshot
 from ..ml.trainer import train_from_snapshot
 from django.utils import timezone
 from django.db import transaction
@@ -19,7 +23,6 @@ from rest_framework.permissions import IsAuthenticated
 class SnapshotIngestJWTView(APIView):
     permission_classes = [IsAuthenticated]
     def post(self, request):
-        # optional: lưu manifest vào DB nếu muốn
         return Response({"ok": True})
 
 

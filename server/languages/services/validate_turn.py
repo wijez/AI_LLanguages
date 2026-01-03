@@ -73,7 +73,7 @@ def _tokens(s: str):
     return [t for t in toks if t not in FILLERS and t not in STOPWORDS]
 
 def _seq_ratio(a: str, b: str) -> float:
-    return SequenceMatcher(None, a, b).ratio()
+    return SequenceMatcher(None, str(a).lower(), str(b).lower()).ratio()
 
 def _token_f1(exp_toks, usr_toks):
     if not exp_toks or not usr_toks:
@@ -130,11 +130,11 @@ def _cosine(u, v):
     nv = math.sqrt(sum(b*b for b in v)) or 1e-9
     return dot / (nu * nv)
 
-# ========== THRESHOLDS (tinh chỉnh được) ==========
-COS_MAIN   = 0.78  # cosine cứng
-COS_SOFT   = 0.72  # cosine mềm + lexical cao
+# ========== THRESHOLDS  ==========
+COS_MAIN   = 0.78  # cosine cứng 1. Ý nghĩa đúng (dù từ khác) -> OK
+COS_SOFT   = 0.72  # cosine mềm + lexical cao 2. Ý nghĩa hơi đúng + Từ vựng khá -> OK
 LEX_STRONG = 0.82  # lexical mạnh khi cosine mềm
-LEX_HARD   = 0.88  # chỉ lexical đủ cao là pass
+LEX_HARD   = 0.88  # chỉ lexical đủ cao là pass # 3. Từ vựng y xì đúc (dù AI ko hiểu) -> OK
 
 def score_user_turn(expected_text: str, expected_vec, user_text: str):
     """
@@ -150,7 +150,7 @@ def score_user_turn(expected_text: str, expected_vec, user_text: str):
 
     # semantic: embed cả 2 NORMALIZED strings
     exp_norm_key = f"embed_cache:{hashlib.sha256(exp_norm.encode('utf-8')).hexdigest()}"
-    evec_norm = embed_one(exp_norm)  # luôn embed lại để nhất quán chuẩn hoá
+    evec_norm = embed_one(exp_norm_key)  
     if evec_norm is None:
         evec_norm = embed_one(exp_norm) # Chỉ embed nếu không có trong cache
         cache.set(exp_norm_key, evec_norm, timeout=3600*24)

@@ -144,7 +144,8 @@ class SkillSessionStartIn(serializers.Serializer):
     skill = serializers.PrimaryKeyRelatedField(queryset=Skill.objects.all())
     enrollment = serializers.PrimaryKeyRelatedField(queryset=LanguageEnrollment.objects.all())
     lesson = serializers.PrimaryKeyRelatedField(queryset=Lesson.objects.all(), required=False, allow_null=True)
-
+    recommendation_id = serializers.IntegerField(required=False, allow_null=True)
+    
 class SkillSessionOut(serializers.ModelSerializer):
     skill_title = serializers.CharField(source='skill.title', read_only=True)
     skill_type = serializers.CharField(source='skill.type', read_only=True)
@@ -170,3 +171,52 @@ class PronAttemptOut(serializers.ModelSerializer):
 
 
 
+
+from rest_framework import serializers
+from languages.models import SkillQuestion, SkillChoice, Skill
+from .models import SkillSession
+
+
+class SkillChoiceOut(serializers.ModelSerializer):
+    class Meta:
+        model = SkillChoice
+        fields = ["id", "text", "is_correct"] 
+
+# 2. Serializer cho câu hỏi (Questions)
+class SkillQuestionOut(serializers.ModelSerializer):
+    options = SkillChoiceOut(many=True, source='choices', read_only=True)
+    
+    class Meta:
+        model = SkillQuestion
+        fields = ["id", "text", "type", "options", "correct_answer_text"]
+
+# 3. Serializer chi tiết phiên học (Dùng cho API GET /session/{id})
+class SkillSessionDetailOut(serializers.ModelSerializer):
+    skill_title = serializers.CharField(source='skill.title', read_only=True)
+    questions = serializers.SerializerMethodField() 
+
+    class Meta:
+        model = SkillSession
+        fields = [
+            "id", "skill", "enrollment", "status",
+            "skill_title", 
+            "questions" 
+        ]
+
+    def get_questions(self, obj):
+        # Lấy câu hỏi từ bảng languages.SkillQuestion
+        # Logic: Lấy ngẫu nhiên 10 câu thuộc skill này
+        qs = SkillQuestion.objects.filter(skill=obj.skill).order_by('?')[:10]
+        return SkillQuestionOut(qs, many=True).data
+
+# 4. Serializer nộp bài (Dùng cho API POST /session/submit)
+class SessionResultItem(serializers.Serializer):
+    qId = serializers.IntegerField()
+    isCorrect = serializers.BooleanField()
+    value = serializers.CharField(allow_blank=True, allow_null=True)
+
+class SkillSessionSubmitSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    time_spent = serializers.IntegerField(min_value=0)
+    outcome = serializers.ChoiceField(choices=['completed', 'failed', 'skipped'])
+    results = SessionResultItem(many=True, required=False)

@@ -11,8 +11,14 @@ log = logging.getLogger(__name__)
 def retrieve_blocks(q_text: str, top_k=8, scenario_slug: Optional[str] = None):
     q_vec = embed_one(q_text)
     qs = (
-        RoleplayBlock.objects.exclude(embedding__isnull=True)
-        .exclude(section='dialogue') 
+        # RoleplayBlock.objects.exclude(embedding__isnull=True)
+        # .exclude(section='dialogue') 
+        RoleplayBlock.objects
+        .filter(scenario__slug=scenario_slug)       # Chỉ tìm trong bài học hiện tại
+        .exclude(embedding__isnull=True)            # Bỏ qua block chưa có vector
+        .annotate(score=CosineDistance("embedding", q_vec)) # So khớp vector
+        .order_by("score")                          # Xếp theo độ tương đồng (thấp nhất là giống nhất với CosineDistance)
+        [:top_k]
     )
     if scenario_slug: qs = qs.filter(scenario__slug=scenario_slug)
     return (qs.annotate(score=CosineDistance("embedding", q_vec))
@@ -31,18 +37,34 @@ SYS = ("You are a helpful and friendly English tutor. "
        "2. The CONTEXT defines the entire topic. Do not answer questions that are off-topic. "
        "3. If the answer cannot be found in the CONTEXT, you MUST politely say: 'I'm sorry, I don't have that information in the current scenario.' "
        "4. Keep your responses encouraging and conversational.")
+
 SYS_PRACTICE = (
-    "You are an expert English Tutor interacting with a student in a roleplay scenario. "
-    "Your tasks are:\n"
-    "1. MAINTAIN THE ROLEPLAY: Respond naturally to the student's input based on the scenario context.\n"
-    "2. TEACHER MODE: Analyze the student's input for grammatical errors, unnatural phrasing, or vocabulary mistakes.\n"
-    "3. OUTPUT FORMAT: You must return a valid JSON object with the following keys:\n"
-    "   - 'reply': Your spoken response to the student (keep it natural, spoken style, 1-2 sentences).\n"
-    "   - 'corrected': The corrected version of the student's input. If the student's input was perfect, return null.\n"
-    "   - 'explanation': A very brief (1 sentence) explanation of the error (e.g., 'Wrong tense', 'Unnatural word choice'). If no error, return null.\n"
-    "\n"
-    "Example JSON:\n"
-    "{ \"reply\": \"That sounds fun!\", \"corrected\": \"I went to the beach.\", \"explanation\": \"Use past tense 'went' instead of 'go'.\" }"
+    "You are an expert English Tutor interacting with a student in a roleplay scenario.\n"
+    "Your Goal: Help the student practice speaking English naturally while maintaining the flow of conversation.\n\n"
+    
+    "=== CRITICAL INSTRUCTIONS ===\n"
+    "1. DUAL MINDSET (Hai tư duy song song):\n"
+    "   - As a TEACHER: Check the user's input for errors. Put corrections in 'corrected' and 'explanation'.\n"
+    "   - As a ROLEPLAY CHARACTER: You MUST respond to the MEANING of the user's input. Put this in 'reply'.\n\n"
+
+    "2. THE 'REPLY' FIELD (STRICT RULES):\n"
+    "   - This is the conversational response.\n"
+    "   - DO NOT say 'Good job', 'Nice try', or talk about grammar here.\n"
+    "   - IF USER ASKS A QUESTION: You MUST answer it based on the Scenario Context.\n"
+    "   - IF USER MAKES A STATEMENT: You MUST respond relevantly and ask a follow-up question to keep the chat going.\n"
+    "   - Language: ALWAYS English.\n\n"
+
+    "3. THE 'EXPLANATION' FIELD:\n"
+    "   - Use the student's support language (if provided in context) to explain errors.\n"
+    "   - Keep it brief.\n\n"
+    
+    "=== OUTPUT FORMAT (JSON) ===\n"
+    "{\n"
+    "  \"reply\": \"(String) Your in-character response. E.g., 'Level one is mild spice, mostly just flavor.'\",\n"
+    "  \"reply_trans\": \"(String) Translation of your response into the Support Language (e.g., Vietnamese).\",\n"
+    "  \"corrected\": \"(String or Null) The corrected version of user input.\",\n"
+    "  \"explanation\": \"(String or Null) Grammar explanation in support language.\"\n"
+    "}"
 )
 def ask_gemini(query: str, blocks) -> str:
     if not os.getenv("GEMINI_API_KEY"): return ""
@@ -76,47 +98,47 @@ def ask_gemini(query: str, blocks) -> str:
         return "I'm sorry, an error occurred with the AI service. Please try again."
 
 
-def ask_gemini_chat(system_context: str, history: list, new_user_input: str) -> dict:
-    """
-    Trả về dict: { "reply": str, "corrected": str|None, "explanation": str|None }
-    """
+def ask_gemini_chat(
+    system_instructions: str, 
+    history: list, 
+    new_user_input: str, 
+    scenario_slug: Optional[str] = None
+) -> dict:
     if not os.getenv("GEMINI_API_KEY"): 
         return {"reply": "AI service not configured.", "corrected": None}
 
-    # Cấu hình Model
-    # Dùng system_instruction để ép khuôn JSON mạnh hơn
-    model = genai.GenerativeModel(GEMINI_MODEL, system_instruction=SYS_PRACTICE)
+    # 1. RAG Retrieve (Giữ nguyên)
+    rag_context = ""
+    if scenario_slug:
+        try:
+            relevant_blocks = retrieve_blocks(new_user_input, top_k=3, scenario_slug=scenario_slug)
+            if relevant_blocks:
+                block_texts = [f"- {b.embedding_text or b.text}" for b in relevant_blocks]
+                rag_context = "\nDETAILS FOUND IN SCENARIO:\n" + "\n".join(block_texts) + "\n"
+        except Exception as e:
+            log.warning(f"RAG Retrieval failed: {e}")
+
+    # 2. [QUAN TRỌNG] Kết hợp SYS_PRACTICE (Luật) + system_instructions (Dữ liệu bài học)
+    # SYS_PRACTICE đứng đầu để định hình hành vi (System Prompt)
+    combined_system_prompt = f"{SYS_PRACTICE}\n\n=== CURRENT SCENARIO INFO ===\n{system_instructions}"
+
+    # 3. Prompt User
+    final_user_prompt = f"{rag_context}\nSTUDENT SAYS: {new_user_input}"
+
+    # Khởi tạo model với Prompt gộp
+    model = genai.GenerativeModel(os.getenv("GEMINI_MODEL"), system_instruction=combined_system_prompt)
     
-    # Chuẩn bị chat history cho SDK
-    # Lưu ý: SDK google.generativeai yêu cầu history có format 'user'/'model' và 'parts'
-    # Bạn cần đảm bảo history truyền vào đúng format này.
-    
-    # Nếu history rỗng, ghép Context vào input đầu
     if not history:
-        final_input = f"CONTEXT:\n{system_context}\n\nSTUDENT SAYS: {new_user_input}"
         chat = model.start_chat(history=[])
     else:
-        final_input = f"STUDENT SAYS: {new_user_input}"
         chat = model.start_chat(history=history)
 
     try:
-        # Ép Gemini trả về JSON mode (nếu model hỗ trợ) hoặc prompt text
         response = chat.send_message(
-            final_input,
-            generation_config={"response_mime_type": "application/json"} # Gemini 1.5 hỗ trợ cái này
+            final_user_prompt,
+            generation_config={"response_mime_type": "application/json"}
         )
-        
-        raw_text = response.text.strip()
-        
-        # Parse JSON
-        try:
-            data = json.loads(raw_text)
-            return data # {reply, corrected, explanation}
-        except json.JSONDecodeError:
-            # Fallback nếu AI lỡ trả về text thường
-            log.warning("Gemini did not return JSON")
-            return {"reply": raw_text, "corrected": None, "explanation": None}
-
+        return json.loads(response.text.strip())
     except Exception as e:
         log.error(f"Gemini Chat Error: {e}")
-        return {"reply": "Sorry, I encountered an error.", "corrected": None}
+        return {"reply": "Sorry, I encountered an error.", "corrected": None, "explanation": None}

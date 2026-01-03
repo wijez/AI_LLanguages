@@ -13,7 +13,7 @@ class AIModelVersionViewSet(viewsets.ModelViewSet):
 class TrainingRunViewSet(viewsets.ModelViewSet):
     queryset = TrainingRun.objects.all().order_by('-started_at')
     serializer_class = TrainingRunSerializer
-    # permission_classes = [IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
 class FeatureSnapshotViewSet(viewsets.ModelViewSet):
     queryset = FeatureSnapshot.objects.all().order_by('-created_at')

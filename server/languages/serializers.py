@@ -526,16 +526,17 @@ class LanguageEnrollmentExportSerializer(serializers.ModelSerializer):
         ]
 
 
-# giữ nguyên nhưng bỏ select/order theo topic ở View (xem bên dưới)
+# giữ nguyên nhưng bỏ select/order theo topic ở View 
 class SkillStatsSerializer(serializers.ModelSerializer):
     skill_id = serializers.IntegerField(source="skill.id", read_only=True)
     skill_title = serializers.CharField(source="skill.title", read_only=True)
-
+    enrollment_id = serializers.IntegerField(source="enrollment.id", read_only=True) 
     class Meta:
         model = UserSkillStats
         fields = [
+            "enrollment_id",
             "skill_id", "skill_title",
-            "level", "proficiency_score",
+            "level", "proficiency_score","xp",
             "last_practiced", "status", "needs_review",
             "lessons_completed_at_level", "lessons_required_for_next",
         ]

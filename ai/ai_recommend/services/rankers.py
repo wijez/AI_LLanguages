@@ -7,7 +7,6 @@ def rank_skills(
     mis_by_skill: Dict[int, Dict[str, Any]],
     acc_map: Dict[int, Dict[str, float]],
     problem_lesson: Dict[int, int],
-    # các “gap” như proficiency, last_practiced nên được kéo từ BE UserSkillStats endpoint (khuyến nghị)
     skill_meta: Dict[int, Dict[str, Any]],  # {skill_id: {'level':int,'proficiency':float,'last_practiced':datetime,'status':str}}
     top_k=5
 ) -> List[SkillCand]:
@@ -41,7 +40,7 @@ def rank_skills(
         score = (w['review_urgency']*review_urgency + w['review_flag']*review_flag + w['error_pressure']*error_pressure +
                  w['prof_gap']*prof_gap + w['recency_gap']*recency_gap + w['difficulty_gap']*difficulty_gap + w['acc_gap']*acc_gap)
 
-        lesson_id = problem_lesson.get(sid)  # fallback: FE có thể chọn lesson đầu tiên của skill nếu None
+        lesson_id = problem_lesson.get(sid) 
 
         rec_type = 'review' if (review_urgency>0.6 or mistakes>0 or needs_review) else 'practice'
         if level <= 1 and (acc is not None and acc >= 90) and mistakes == 0:

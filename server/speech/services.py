@@ -15,16 +15,12 @@ from difflib import SequenceMatcher
 import shutil
 from django.conf import settings
 import logging
+import unicodedata
+from pathlib import Path
 logger = logging.getLogger(__name__)
 
-# =========================
-# Debug switch
-# =========================
-DEBUG_AUDIO = True  # bật để in log & trả thông tin debug
 
-# =========================
-# Whisper model (lazy)
-# =========================
+DEBUG_AUDIO = True 
 _model = None
 def get_model():
     global _model
@@ -33,19 +29,15 @@ def get_model():
         _model = whisper.load_model("small")
     return _model
 
-# ở đầu file (thêm import)
-import unicodedata
-from pathlib import Path
 
 def _sanitize_for_piper(text: str) -> str:
-    """Loại surrogate/emoji/ZWJ và normalize để piper/espeak không lỗi."""
+    """Làm sạch văn bản đầu vào. 
+    Loại bỏ các ký tự lạ (emoji, ký tự điều khiển) 
+    có thể khiến phần mềm Piper bị lỗi (crash)."""
     if not isinstance(text, str):
         text = str(text)
-    # bỏ surrogate range (U+D800..U+DFFF)
     text = re.sub(r'[\ud800-\udfff]', '', text)
-    # bỏ ZWJ & variation selectors (hay gây lỗi với espeak)
     text = re.sub(r'[\u200d\ufe0e\ufe0f]', '', text)
-    # chuẩn hóa Unicode
     try:
         text = unicodedata.normalize("NFC", text)
     except Exception:
@@ -57,6 +49,11 @@ def _sanitize_for_piper(text: str) -> str:
     return text
 
 def _tts_piper_to_mp3_b64(text: str, lang: str) -> str:
+    """
+    Core Logic của Piper. 
+    Gọi tiến trình con (subprocess) chạy Piper để tạo âm thanh WAV, 
+    sau đó chuyển sang MP3 base64.
+    """
     bin_path, voice_dir, voices = _piper_conf()
 
     if not shutil.which(bin_path):
@@ -81,7 +78,6 @@ def _tts_piper_to_mp3_b64(text: str, lang: str) -> str:
     if not config_path:
         raise RuntimeError(f"piper_config_missing:{model_path}.json")
 
-    # env “an toàn” cho Windows temp
     tmp_dir = Path(getattr(settings, "PIPER_TMP_DIR", Path(getattr(settings, "BASE_DIR", Path.cwd())) / "tmp")).resolve()
     tmp_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -130,9 +126,9 @@ def _tts_piper_to_mp3_b64(text: str, lang: str) -> str:
 def _piper_conf():
     """
     Lấy cấu hình Piper từ settings hoặc ENV:
-      - PIPER_BIN: đường dẫn 'piper' (vd 'piper' hoặc 'C:\\tools\\piper.exe')
+      - PIPER_BIN: đường dẫn  'piper.exe'
       - PIPER_VOICE_DIR: thư mục chứa các model .onnx
-      - PIPER_VOICES: map ngôn ngữ -> tên file model (tương đối so với VOICE_DIR hoặc path tuyệt đối)
+      - PIPER_VOICES: map ngôn ngữ 
     """
     bin_path = getattr(settings, "PIPER_BIN", os.environ.get("PIPER_BIN", "piper"))
     voice_dir = getattr(settings, "PIPER_VOICE_DIR", os.environ.get("PIPER_VOICE_DIR", os.path.join(os.getcwd(), "voices")))
@@ -156,64 +152,12 @@ def _wav_bytes_to_mp3_b64(wav_bytes: bytes) -> str:
     )
     return base64.b64encode(p.stdout).decode("utf-8")
 
-# def _tts_piper_to_mp3_b64(text: str, lang: str) -> str:
-#     """
-#     Sinh giọng bằng Piper và trả MP3 base64. Ném Exception nếu thiếu piper/voice/ffmpeg.
-#     """
-#     bin_path, voice_dir, voices = _piper_conf()
-
-#     # 1) phải có piper
-#     if not shutil.which(bin_path):
-#         raise RuntimeError("piper_not_found")
-
-#     # 2) lấy model theo lang (fallback 'en')
-#     lang = (lang or "en").lower().strip()
-#     voice_file = voices.get(lang) or voices.get("en")
-#     if not voice_file:
-#         raise RuntimeError("piper_voice_not_configured")
-
-#     model_path = voice_file if os.path.isabs(voice_file) else os.path.join(voice_dir, voice_file)
-#     if not os.path.exists(model_path):
-#         raise RuntimeError(f"piper_voice_missing:{model_path}")
-
-#     # 3) Gọi Piper đúng cờ: --model / --output_file
-#     #    Thử xuất WAV ra stdout trước ( --output_file - ), nếu fail thì dùng file tạm.
-#     try:
-#         p = subprocess.run(
-#             [bin_path, "--model", model_path, "--output_file", "-"],
-#             input=text.encode("utf-8"),
-#             capture_output=True,
-#             check=True
-#         )
-#         wav_bytes = p.stdout
-#         if not wav_bytes:
-#             raise RuntimeError("piper_no_audio_stdout")
-#         return _wav_bytes_to_mp3_b64(wav_bytes)
-#     except Exception as e1:
-#         # Thử lại với file WAV tạm (một số build Piper trên Windows ổn định hơn khi ghi file)
-#         tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
-#         try:
-#             p2 = subprocess.run(
-#                 [bin_path, "--model", model_path, "--output_file", tmp_wav],
-#                 input=text.encode("utf-8"),
-#                 capture_output=True,
-#                 check=True
-#             )
-#             if not os.path.exists(tmp_wav) or os.path.getsize(tmp_wav) == 0:
-#                 raise RuntimeError(f"piper_no_audio_file rc={p2.returncode} stderr={p2.stderr.decode(errors='ignore')}")
-#             with open(tmp_wav, "rb") as f:
-#                 wav_bytes = f.read()
-#             return _wav_bytes_to_mp3_b64(wav_bytes)
-#         except Exception as e2:
-#             # Gộp lỗi cho dễ debug ở log phía trên
-#             raise RuntimeError(f"piper_run_failed: stdout_err={getattr(e1,'stderr',b'')!r} file_err={getattr(e2,'stderr',b'')!r}") 
-#         finally:
-#             _safe_remove(tmp_wav)
-
-# =========================
-# Alignment helpers (NEW)
-# =========================
 def _lev_distance(a: str, b: str) -> int:
+    """
+    Thuật toán Levenshtein. 
+    Tính khoảng cách chỉnh sửa giữa 2 từ. 
+    Dùng để xem từ người dùng nói có "gần đúng" với từ mẫu không (ví dụ: word vs world).
+    """
     import numpy as np
     dp = np.zeros((len(a)+1, len(b)+1), dtype=int)
     for i in range(len(a)+1): dp[i,0] = i
@@ -227,8 +171,13 @@ def _lev_distance(a: str, b: str) -> int:
 def _align_ref_hyp(ref_words: list[str], hyp_words_timed: list[dict], near_ok_ed: int = 1):
     """
     Trả:
+    reference_words: list[str] mẫu câu, hyp_words_timed: list[dict] từ người nói
       per_word: list[{word, score, start, end, status}]
       aligned_hyp_for_wer: list[str]  # bỏ các 'insert' để WER/CER chỉ tính phần expected
+      Thuật toán Gióng hàng (Alignment).
+        - Input: Từ mẫu (ref) và Từ người nói (hyp).
+        - Output: Danh sách lỗi chi tiết (từ nào đúng, từ nào sai, từ nào thiếu, từ nào thừa).
+        - Sử dụng SequenceMatcher để so sánh.
     """
     hyp_words = [w["word"] for w in hyp_words_timed]
     sm = SequenceMatcher(None, ref_words, hyp_words, autojunk=False)
@@ -284,9 +233,6 @@ def _align_ref_hyp(ref_words: list[str], hyp_words_timed: list[dict], near_ok_ed
 
     return per_word, aligned_hyp_for_wer
 
-# =========================
-# Prosody helper
-# =========================
 def _speed_factor(duration_s: float, num_chars: int) -> float:
     """
     Hệ số prosody dựa trên tốc độ nói xấp xỉ (syllables/sec).
@@ -303,10 +249,10 @@ def _speed_factor(duration_s: float, num_chars: int) -> float:
         return 1.00
     return 0.90
 
-# =========================
-# ffprobe / ffmpeg helpers
-# =========================
 def _ffprobe_json(path: str) -> dict:
+    """
+    Lấy thông tin metadata của file âm thanh (độ dài, codec, bitrate) dưới dạng JSON.
+    """
     try:
         out = subprocess.check_output([
             "ffprobe", "-hide_banner", "-loglevel", "error",
@@ -317,6 +263,9 @@ def _ffprobe_json(path: str) -> dict:
         return {}
 
 def _probe_duration_sec(probe: dict) -> Optional[float]:
+    """
+    Trích xuất độ dài (duration) tính bằng giây từ kết quả probe
+    """
     d = None
     try:
         if "format" in probe and "duration" in probe["format"]:
@@ -342,7 +291,7 @@ def _ffmpeg_to_wav_16k_mono(src_path: str, trim_silence: bool = False) -> tuple[
     """
     Convert input -> WAV 16k mono.
     Mặc định KHÔNG cắt im lặng, KHÔNG bỏ frame hỏng.
-    Nếu output ngắn bất thường so với input -> thử lại với các cấu hình khác.
+    để xử lý các file lỗi, file mất header, hoặc file quá ngắn.
     """
     info: dict = {
         "pass": "p1_plain",
@@ -439,7 +388,7 @@ def _ffmpeg_to_wav_16k_mono(src_path: str, trim_silence: bool = False) -> tuple[
         if not short:
             return dst, info
 
-    # Pass 4 (tùy chọn): chỉ khi bạn MUỐN cắt im lặng, thử rất nhẹ 150ms @ -35dB
+    # Pass 4 : chỉ khi bạn MUỐN cắt im lặng, thử rất nhẹ 150ms @ -35dB
     if trim_silence:
         base4 = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -466,18 +415,13 @@ def _ffmpeg_to_wav_16k_mono(src_path: str, trim_silence: bool = False) -> tuple[
         pass
     raise RuntimeError("ffmpeg failed to decode audio (all passes)")
 
-# =========================
-# Text helpers
-# =========================
+
 def _normalize_text(s: str) -> str:
     s = s.lower().strip()
     s = re.sub(r"[^a-zA-Z0-9\u00C0-\u1EF9\s']", " ", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
-# =========================
-# Base64 helpers (an toàn)
-# =========================
 def _strip_data_url_prefix(b64: str) -> str:
     if isinstance(b64, str) and b64.strip().lower().startswith("data:") and "," in b64:
         return b64.split(",", 1)[1]
@@ -525,9 +469,6 @@ def _b64_to_bytes_any(s: str) -> bytes:
     t = re.sub(r"[^A-Za-z0-9+/=]", "", s)
     return _try_decode(t)
 
-# =========================
-# Bytes ↔ temp file helpers
-# =========================
 def _guess_audio_suffix(raw: bytes) -> str:
     if not raw or len(raw) < 12:
         return ".tmp"
@@ -540,6 +481,10 @@ def _guess_audio_suffix(raw: bytes) -> str:
     return ".tmp"
 
 def _looks_like_audio(raw: bytes) -> bool:
+    """
+    Kiểm tra xem bytes nhận được có phải là file âm
+     thanh hợp lệ không (dựa trên magic numbers ở đầu file).
+    """
     return bool(raw) and len(raw) >= 256 and _guess_audio_suffix(raw) != ".tmp"
 
 def _bytes_to_temp_audio(raw: bytes, forced_suffix: Optional[str] = None) -> str:
@@ -566,25 +511,6 @@ def _debug_head(raw: bytes, label: str = "audio"):
     except Exception:
         pass
 
-# =========================
-# TTS (gTTS)
-# =========================
-# def tts_synthesize(text: str, lang: Optional[str] = None) -> Tuple[str, str]:
-#     lang = (lang or "en").lower()
-#     try:
-#         tts = gTTS(text=text, lang=lang)
-#     except Exception:
-#         tts = gTTS(text=text, lang="en")
-#     tmp_path = None
-#     try:
-#         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-#             tmp_path = tmp.name
-#         tts.save(tmp_path)
-#         with open(tmp_path, "rb") as f:
-#             audio_b64 = base64.b64encode(f.read()).decode("utf-8")
-#         return audio_b64, "audio/mpeg"
-#     finally:
-#         _safe_remove(tmp_path)
 
 def tts_synthesize(text: str, lang: Optional[str] = None) -> Tuple[str, str]:
     """
@@ -603,7 +529,7 @@ def tts_synthesize(text: str, lang: Optional[str] = None) -> Tuple[str, str]:
         # Ghi log + quyết định có cho fallback hay không
         logger.warning("[TTS] Piper FAILED (lang=%s): %r", lang_norm, e)
         if STRICT_PIPER:
-            # Muốn debug Piper, đặt PIPER_STRICT=True trong settings -> thấy lỗi ngay trên API
+            # Muốn debug Piper, đặt PIPER_STRICT=True trong settings 
             raise
 
     # ---- 2) Fallback gTTS (khi Piper không chạy được) ----
@@ -612,7 +538,7 @@ def tts_synthesize(text: str, lang: Optional[str] = None) -> Tuple[str, str]:
         tts = gTTS(text=text, lang=lang_fallback)
         logger.info("[TTS] Using gTTS(lang=%s) as fallback", lang_fallback)
     except Exception:
-        # Lang không hỗ trợ -> fallback EN
+        # Lang không hỗ trợ 
         tts = gTTS(text=text, lang="en")
         logger.info("[TTS] Using gTTS(lang=en) after lang=%s failed", lang_fallback)
 
@@ -628,9 +554,6 @@ def tts_synthesize(text: str, lang: Optional[str] = None) -> Tuple[str, str]:
         _safe_remove(tmp_path)
 
 
-# =========================
-# STT (base64 → text)
-# =========================
 def stt_transcribe(audio_base64: str, lang: Optional[str] = None) -> str:
     text, _debug = stt_transcribe_with_debug(audio_base64, lang)
     return text
@@ -689,12 +612,13 @@ def stt_transcribe_with_debug(audio_base64: str, lang: Optional[str] = None) -> 
         _safe_remove(in_path)
         _safe_remove(wav_path)
 
-# =========================
-# Pronunciation scoring
-# =========================
 def simple_pron_score(audio_base64: str, expected_text: str, lang: str = "en") -> Dict[str, Any]:
     """
     Trả dict gồm overall/words/details + debug (nếu DEBUG_AUDIO)
+        1. Gọi Whisper để lấy văn bản (hyp_text).
+        2. Tính WER/CER (tỷ lệ lỗi).
+        3. Gọi _align_ref_hyp để phân tích lỗi.
+        4. Tính điểm tổng hợp overall dựa trên trọng số (60% đúng từ, 20% đúng ký tự, 20% độ tự tin AI).
     """
     in_path, wav_path = None, None
     try:
@@ -707,7 +631,6 @@ def simple_pron_score(audio_base64: str, expected_text: str, lang: str = "en") -
         wav_path, ffm = _ffmpeg_to_wav_16k_mono(in_path, trim_silence=False)
 
         model = get_model()
-        # Cấu hình giống STT để nhất quán
         result = model.transcribe(
             wav_path,
             language=(lang or "en"),
@@ -732,7 +655,7 @@ def simple_pron_score(audio_base64: str, expected_text: str, lang: str = "en") -
             except Exception:
                 duration = 0.0
 
-        # conf ~ sigmoid(avg_logprob)
+        # conf ~ sigmoid(avg_logprob) 
         seg_confs = [1.0 / (1.0 + np.exp(-seg.get("avg_logprob", -3.0))) for seg in segments] or [0.5]
         conf = float(np.mean(seg_confs))
 
@@ -764,7 +687,7 @@ def simple_pron_score(audio_base64: str, expected_text: str, lang: str = "en") -
                     "end": t0 + (i + 1) * step
                 })
 
-        # --- REF words (normalized) ---
+        # --- REF words (normalized) Văn bản mẫu ---
         ref = (expected_text or "").strip()
         ref_words = [w for w in _normalize_text(ref).split(" ") if w]
 

@@ -1,4 +1,3 @@
-# languages/management/commands/load_lessons_flat.py
 import json
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction

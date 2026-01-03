@@ -157,7 +157,7 @@ class MistakeViewSet(viewsets.ModelViewSet):
     filterset_fields = ['skill','lesson','enrollment','source']
     ordering_fields = ['timestamp','id']
 
-@api_view(['GET'])
-def export_mistakes(request):
-    qs = Mistake.objects.all().values("user_id", "enrollment_id", "score", "source", "timestamp")
-    return Response(list(qs))
+    @api_view(['GET'])
+    def export_mistakes(request):
+        qs = Mistake.objects.all().values("user_id", "enrollment_id", "score", "source", "timestamp")
+        return Response(list(qs))
