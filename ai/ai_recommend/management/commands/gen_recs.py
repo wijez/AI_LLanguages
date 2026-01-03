@@ -1,4 +1,3 @@
-# ai_recommend/management/commands/gen_recs.py
 from django.core.management.base import BaseCommand
 from ai_recommend.services.generate_recommendations import generate_recommendations_for_user
 

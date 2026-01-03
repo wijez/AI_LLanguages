@@ -830,7 +830,6 @@ class SkillStatsViewSet(ReadOnlyModelViewSet):
         if lang:
             qs = qs.filter(enrollment__language__abbreviation=lang)
 
-        # không còn "skill__topic__order"/"skill__order"
         return qs.order_by("skill__title", "skill_id")
 
 
@@ -1291,6 +1290,7 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
 
         sc_slug = serializer.validated_data["scenario"]
         role = serializer.validated_data["role"]
+        
         language = serializer.validated_data.get("language", "vi")
 
         scn = (
@@ -1298,7 +1298,7 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
             or get_object_or_404(RoleplayScenario, id=sc_slug)
         )
 
-        # 1. Load blocks
+        # 1. Load blocks để lấy context sơ lược
         all_blocks = RoleplayBlock.objects.filter(
             scenario=scn
         ).order_by("order")
@@ -1314,76 +1314,27 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
 
         # 2. Build SYSTEM CONTEXT
         sys_ctx = f"""
-            Scenario: {scn.title}
+            === SCENARIO INFORMATION ===
+            Title: {scn.title}
             Level: {scn.level}
-            Learner support language: {language}
+            Description: {scn.description}
 
-            You are an AI language tutor participating in a roleplay conversation for language learning.
+            === ROLE ASSIGNMENT ===
+            User plays: {role}
+            AI plays: All other roles (Teacher, Narrator, Conversation Partner)
 
-            Your task is NOT to translate blindly.
-            You MUST follow the 4-step response structure below whenever the USER speaks English.
+            === LANGUAGE SETTINGS ===
+            - Target Language (Roleplay): English
+            - Student Support Language: {language} 
+            (NOTE: Use {language} ONLY for explanations or translations of the corrected sentence. The main reply MUST be in English.)
 
-            The TARGET_LANGUAGE is: {language}
-
-            === REQUIRED PROCESSING RULES ===
-
-            1. USER ORIGINAL
-            - Preserve the user's original English sentence exactly as written.
-            - Do NOT modify it.
-
-            2. GRAMMAR & STRUCTURE FIX
-            - Provide a corrected English version.
-            - Fix grammar, word choice, structure.
-            - Preserve meaning.
-            - If already correct, repeat unchanged.
-
-            3. MEANING (TARGET_LANGUAGE)
-            - Translate ONLY the corrected sentence.
-            - Use natural {language}.
-
-            4. AI RESPONSE (ROLEPLAY CONTINUATION)
-            - Continue the roleplay naturally in English.
-            - Ask at least ONE follow-up question.
-            - Then translate your response to {language}.
-
-            === OUTPUT FORMAT (STRICT) ===
-
-            USER (Original):
-            {{user_sentence}}
-
-            AI – Grammar Fix:
-            {{corrected_sentence}}
-
-            AI – Meaning ({language}):
-            {{translated_meaning}}
-
-            AI – Response (EN):
-            {{ai_reply}}
-
-            AI – Response ({language}):
-            {{translated_reply}}
-
-            === SECTION AWARENESS ===
+            === SCENARIO CONTENT PREVIEW ===
             """
-
+        
+        # Đưa nội dung các câu thoại vào để AI nắm mạch truyện chung.
+        # Chi tiết cụ thể khi chat sẽ do RAG tìm kiếm thêm.
         for b in context_blocks:
-            sys_ctx += f"\n[{b.section.upper()}]: {b.text}\n"
-
-        sys_ctx += f"""
-            ROLE DEFINITION
-            - The user plays the role: {role}
-            - You play all other necessary roles.
-
-            CORE BEHAVIOR
-            - You are the ACTIVE conversation driver.
-            - NEVER end a turn without a question.
-            - Stay strictly within scenario and instruction blocks.
-
-            FORBIDDEN
-            - NEVER skip steps
-            - NEVER merge steps
-            - NEVER answer without a question
-            """
+            sys_ctx += f"[{b.section.upper()}]: {b.text}\n"
 
         # 3. Init history
         history = []
@@ -1391,6 +1342,7 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
 
         if warmup_blocks:
             first_warmup = warmup_blocks[0]
+            # Format history cho Gemini SDK
             history.append({
                 "role": "model",
                 "parts": [first_warmup.text]
@@ -1401,7 +1353,7 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
                 "role": "assistant"
             }
 
-        # 4. Create session
+        # 4. Create session & Save Cache
         sid = str(uuid.uuid4())
 
         if request.user.is_authenticated:
@@ -1414,11 +1366,13 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
                 history_log=history
             )
 
+        # Lưu các tham số cần thiết vào Cache
         save_session(sid, {
             "mode": "practice",
             "scenario_id": str(scn.id),
+            "scenario_slug": scn.slug,  # <-- Cần thiết cho RAG
             "user_role": role,
-            "system_context": sys_ctx,
+            "system_context": sys_ctx,  # <-- Chỉ chứa Info, không chứa Rules
             "history": history,
             "created_at": int(time.time()),
             "language": language,
@@ -1439,23 +1393,22 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
         sid = serializer.validated_data["session_id"]
         transcript = serializer.validated_data["transcript"]
 
-        # A. Ưu tiên lấy từ Cache
+        # A. Lấy session từ Cache
         sess = get_session(sid)
         
-        # B Nếu Cache mất (do restart server), thử phục hồi từ DB
         if not sess:
             try:
-                db_sess = PracticeSession.objects.get(id=sid)
-                # Rehydrate cache từ DB
+                db_sess = PracticeSession.objects.select_related('scenario').get(id=sid)
                 sess = {
                     "mode": "practice",
                     "scenario_id": str(db_sess.scenario.id),
+                    "scenario_slug": db_sess.scenario.slug, # Phục hồi slug
                     "user_role": db_sess.role,
                     "system_context": db_sess.system_context,
                     "history": db_sess.history_log,
                     "created_at": db_sess.created_at.timestamp()
                 }
-                save_session(sid, sess) # Lưu lại vào cache
+                save_session(sid, sess)
             except PracticeSession.DoesNotExist:
                 return Response({"detail": "Invalid session"}, status=400)
 
@@ -1464,11 +1417,17 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
 
         history = sess.get("history", [])
         sys_ctx = sess.get("system_context", "")
+        scenario_slug = sess.get("scenario_slug") # Lấy slug để RAG tìm context
         
-        # 1. Gọi Gemini
-        ai_data = ask_gemini_chat(sys_ctx, history, transcript)
+        ai_data = ask_gemini_chat(
+            system_instructions=sys_ctx, 
+            history=history, 
+            new_user_input=transcript,
+            scenario_slug=scenario_slug  # <--- Truyền Slug vào để RAG tìm block embedding
+        )
         
         ai_reply = ai_data.get("reply", "") or "..."
+        ai_trans = ai_data.get("reply_trans", "")
         correction = ai_data.get("corrected")
         explanation = ai_data.get("explanation")
 
@@ -1484,12 +1443,13 @@ class RoleplaySessionViewSet(viewsets.ViewSet):
                 updated_at=timezone.now()
             )
 
-        # 4. Sinh Audio
+        # 4. Sinh Audio cho câu trả lời của AI
         ai_audio = generate_tts_from_text(ai_reply, lang="en")
 
         return Response({
             "user_transcript": transcript,
             "ai_text": ai_reply,
+            "ai_trans": ai_trans,
             "ai_audio": ai_audio,
             "feedback": {
                 "has_error": bool(correction),

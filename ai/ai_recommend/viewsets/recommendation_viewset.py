@@ -26,7 +26,7 @@ class RecommendationViewSet(viewsets.ModelViewSet):
     # Tìm theo title (serializer sẽ resolve title), reasons/payload là JSON nên chỉ search cơ bản theo id
     search_fields = ["=id"]
     ordering_fields = ["priority_score", "created_at", "id"]
-    ordering = ["-priority_score", "-created_at"]
+    ordering = ["-created_at", "-priority_score"]
 
     @extend_schema(
         parameters=[
@@ -66,3 +66,26 @@ class RecommendationViewSet(viewsets.ModelViewSet):
         raise PermissionDenied("Recommendations are materialized by the pipeline, not manually.")
         # Hoặc:
         # serializer.save(user_id=self.request.user.id)
+    @action(detail=False, methods=['get'], url_path='latest')
+    def latest(self, request):
+        """
+        Trả về danh sách các bài học thuộc đợt gợi ý (Batch) MỚI NHẤT.
+        Ví dụ: Trả về 5 bài học vừa được AI tạo ra cùng lúc.
+        """
+        user = request.user
+        
+        # 1. Tìm bản ghi mới nhất để lấy ra "Mã đợt hàng" (batch_id)
+        # Sắp xếp theo created_at giảm dần để lấy cái mới nhất
+        last_rec = Recommendation.objects.filter(user_id=user.id).order_by('-created_at').first()
+        
+        if not last_rec:
+            return Response([]) # Chưa có gợi ý nào
+
+        # 2. Lấy TẤT CẢ các bài có cùng batch_id đó
+        # Đây chính là "Thực đơn" mà AI đã soạn ra trong lần chạy đó
+        current_batch = (Recommendation.objects
+                         .filter(user_id=user.id, batch_id=last_rec.batch_id)
+                         .order_by('-priority_score')) # Sắp xếp bài quan trọng nhất lên đầu
+
+        serializer = self.get_serializer(current_batch, many=True)
+        return Response(serializer.data)

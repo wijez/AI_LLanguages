@@ -202,7 +202,7 @@ CELERY_ENABLE_UTC = False
 CELERY_BEAT_SCHEDULE = {
     "train-ai-model-every-10m": {
         "task": "ai.tasks.train_ai_model_task",
-        "schedule": crontab(minute="*/10"),
+        "schedule": crontab(minute="*/60"),
         "options": {
             "queue": "ai",        # nếu bạn tách queue
             "expires": 8 * 60,    # job quá hạn sau 9 phút (tránh dồn đống)
